@@ -1,0 +1,15 @@
+metric,baseline,recoverAI
+cases,3312.0,3312.0
+recovered_cases,1233.0,1494.0
+recovery_rate,0.37228260869565216,0.45108695652173914
+money_recovered,31165630.84,36728253.35
+incremental_money_recovered,0.0,5562622.510000002
+improvement_percent,0.0,17.848579862085032
+gross_revenue_at_risk,85832772.91,85832772.91
+total_expected_recovery,0.0,48781084.176799685
+total_erv,0.0,48754858.176799685
+action_cost,0.0,26226.0
+escalated_cases,0.0,1800.0
+stopped_cases,0.0,18.0
+multi_attempt_cases,0.0,51.0
+total_recovery_attempts,3312.0,2775.0
