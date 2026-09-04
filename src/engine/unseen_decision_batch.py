@@ -31,6 +31,7 @@ CASES_PATH = (
 CUSTOMERS_PATH = (
     BASE_DIR
     / "data"
+    / "unseen"
     / "raw"
     / "customers.csv"
 )
@@ -93,7 +94,14 @@ def main():
         customers_df[customer_columns],
         on="customer_id",
         how="left",
+        validate="many_to_one",
     )
+
+    if context_df["customer_segment"].isna().any():
+        raise ValueError(
+            "Unseen customer context is incomplete. "
+            "Every unseen recovery case must match an unseen customer."
+        )
 
     context_df["failure_category"] = (
         context_df["failure_categories"]

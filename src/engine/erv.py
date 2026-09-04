@@ -4,8 +4,8 @@ from src.data.outcome_rules import (
     ACTION_COSTS,
     get_amount_bucket,
 )
-from src.model.predictor import (
-    predict_recovery_probability,
+from src.model.action_recommender import (
+    predict_action_probability,
 )
 
 
@@ -52,7 +52,7 @@ def score_case_actions(
     for action in ACTIONS:
 
         probability = (
-            predict_recovery_probability(
+            predict_action_probability(
                 case,
                 action,
             )

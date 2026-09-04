@@ -7,6 +7,8 @@ import streamlit as st
 from src.data.outcome_rules import get_amount_bucket
 from src.engine.decision_engine import apply_decision, evaluate_guardrails
 from src.engine.erv import score_case_actions
+from src.engine.recovery_agent import run_recovery_case
+from src.engine.channel_policy import choose_recovery_channel
 from src.engine.recovery_policy import get_initial_action, get_permitted_actions, get_recovery_sequence
 
 
@@ -40,6 +42,7 @@ def load_data():
     """
     unseen_decisions_path = os.path.join(UNSEEN_DIR, "decisions.csv")
     unseen_agent_path = os.path.join(UNSEEN_DIR, "agent_results.csv")
+    unseen_baseline_path = os.path.join(UNSEEN_DIR, "baseline_results.csv")
     unseen_cases_path = os.path.join(UNSEEN_DIR, "recovery_cases.csv")
 
     if not (
@@ -54,6 +57,11 @@ def load_data():
 
     decisions = pd.read_csv(unseen_decisions_path)
     agent = pd.read_csv(unseen_agent_path)
+    baseline = (
+        pd.read_csv(unseen_baseline_path)
+        if os.path.exists(unseen_baseline_path)
+        else None
+    )
 
     data = decisions.merge(
         agent,
@@ -62,11 +70,28 @@ def load_data():
         suffixes=("", "_agent"),
     )
 
+    if baseline is not None:
+        data = data.merge(
+            baseline[
+                [
+                    "case_id",
+                    "recovered",
+                    "recovered_amount",
+                    "attempts",
+                ]
+            ],
+            on="case_id",
+            how="left",
+            suffixes=("", "_baseline"),
+            validate="one_to_one",
+        )
+
     if os.path.exists(unseen_cases_path):
         cases = pd.read_csv(unseen_cases_path)
 
         case_columns = [
             "case_id",
+            "recovery_amount",
             "surfaces",
             "event_types",
             "failure_categories",
@@ -271,8 +296,39 @@ st.caption(
 st.success(
     "🧪 Unseen Evaluation Mode — dashboard metrics below are "
     "generated from the held-out recovery population, not the "
-    "development sample."
+    "development sample. Outcomes are simulated benchmark results; "
+    "production payment verification is provider-controlled."
 )
+
+headline_cases = len(data)
+headline_recovered = int(
+    (data["final_status"] == "recovered").sum()
+)
+headline_money = float(data["total_recovered"].sum())
+headline_baseline_money = float(
+    pd.to_numeric(
+        data.get("recovered_amount", pd.Series(dtype=float)),
+        errors="coerce",
+    ).fillna(0).sum()
+)
+
+st.caption(
+    "JUDGE SUMMARY | Razorpay Test Mode webhook verified | "
+    "Benchmark outcomes are simulated, not production revenue."
+)
+
+headline_col1, headline_col2, headline_col3, headline_col4 = st.columns(4)
+with headline_col1:
+    st.metric("Cases evaluated", f"{headline_cases:,}")
+with headline_col2:
+    st.metric("RecoverAI recovery", f"{headline_recovered / headline_cases:.2%}")
+with headline_col3:
+    st.metric("Verified simulated recovery", format_inr(headline_money))
+with headline_col4:
+    st.metric(
+        "Incremental vs baseline",
+        format_inr(headline_money - headline_baseline_money),
+    )
 
 
 # =========================================================
@@ -395,8 +451,9 @@ st.header("🧪 Judge Mode")
 st.caption(
     "Create a case and see the full RecoverAI reasoning: why the payment "
     "failed, what recovery strategy is permitted, the ML recoverability "
-    "signal, and which bounded action is executed next. Economics informs "
-    "the decision but cannot override the failure-aware policy."
+    "signal, action-conditioned recommendation, and which bounded action "
+    "is executed next. Economics informs the decision but cannot override "
+    "the failure-aware policy or safety guardrails."
 )
 
 failure_options = get_unique_options(
@@ -485,7 +542,7 @@ with st.form("judge_case_form"):
 
     submitted = st.form_submit_button(
         "🚀 Run RecoverAI",
-        use_container_width=True,
+        width="stretch",
         type="primary",
     )
 
@@ -756,7 +813,66 @@ if submitted:
 
                 st.dataframe(
                     candidate_display,
-                    use_container_width=True,
+                    width="stretch",
+                    hide_index=True,
+                )
+
+            st.subheader("Closed-loop execution")
+            agent_case = {
+                **judge_case,
+                **decision,
+            }
+            agent_result = run_recovery_case(
+                agent_case,
+                scores,
+            )
+
+            execution_col1, execution_col2, execution_col3 = st.columns(3)
+            with execution_col1:
+                st.metric(
+                    "Final status",
+                    agent_result["final_status"].upper(),
+                )
+            with execution_col2:
+                st.metric(
+                    "Verified recovery",
+                    format_inr(agent_result["total_recovered"]),
+                )
+            with execution_col3:
+                st.metric(
+                    "Automated attempts",
+                    str(agent_result["attempts"]),
+                )
+
+            st.caption(
+                "Delivery channel: "
+                + choose_recovery_channel(agent_case, action)
+                + ". ML recommends; policy, consent, and guardrails authorize."
+            )
+
+            st.write(
+                "State path: "
+                + " -> ".join(agent_result["state_history"])
+            )
+
+            audit_display = pd.DataFrame(
+                agent_result["audit_events"]
+            )
+            audit_columns = [
+                column
+                for column in [
+                    "event",
+                    "action",
+                    "from_state",
+                    "to_state",
+                    "reason",
+                ]
+                if column in audit_display.columns
+            ]
+            if audit_columns:
+                st.dataframe(
+                    audit_display[audit_columns],
+                    width="stretch",
                     hide_index=True,
                 )
 
@@ -976,7 +1092,7 @@ with st.expander("🛡️ Run predefined safety stress tests"):
 
         st.dataframe(
             pd.DataFrame(results),
-            use_container_width=True,
+            width="stretch",
             hide_index=True,
         )
 
@@ -1003,6 +1119,27 @@ revenue_at_risk = (
     )
     .fillna(0)
     .sum()
+)
+
+baseline_recovered_cases = int(
+    data.get(
+        "recovered",
+        pd.Series(dtype=bool),
+    ).fillna(False).sum()
+)
+baseline_recovered_money = float(
+    pd.to_numeric(
+        data.get(
+            "recovered_amount",
+            pd.Series(dtype=float),
+        ),
+        errors="coerce",
+    ).fillna(0).sum()
+)
+baseline_recovery_rate = (
+    baseline_recovered_cases / total_cases
+    if total_cases
+    else 0.0
 )
 
 col1, col2, col3, col4 = st.columns(4)
@@ -1035,6 +1172,41 @@ st.caption(
     "Economic metrics above are calculated directly from the "
     "3,262-case unseen-agent output. No development-set result "
     "is mixed into these values."
+)
+
+st.subheader("Baseline comparison")
+comparison = pd.DataFrame(
+    {
+        "Metric": [
+            "Recovery rate",
+            "Recovered money",
+        ],
+        "RecoverAI": [
+            recovery_rate,
+            money_recovered,
+        ],
+        "One-retry baseline": [
+            baseline_recovery_rate,
+            baseline_recovered_money,
+        ],
+    }
+)
+
+comparison_display = comparison.astype(object)
+comparison_display.loc[0, ["RecoverAI", "One-retry baseline"]] = comparison_display.loc[
+    0,
+    ["RecoverAI", "One-retry baseline"],
+].map(lambda value: f"{value:.2%}")
+comparison_display.loc[1, ["RecoverAI", "One-retry baseline"]] = comparison_display.loc[
+    1,
+    ["RecoverAI", "One-retry baseline"],
+].map(format_inr)
+st.dataframe(comparison_display, hide_index=True, width="stretch")
+
+st.success(
+    "RecoverAI recovered "
+    f"{format_inr(money_recovered - baseline_recovered_money)} "
+    "more than the one-retry baseline on the same unseen cases."
 )
 
 
@@ -1219,7 +1391,7 @@ with col2:
 
     st.dataframe(
         display_confidence,
-        use_container_width=True,
+        width="stretch",
         hide_index=True,
     )
 
@@ -1304,7 +1476,7 @@ st.dataframe(
         "Recovery Rate",
         ascending=False,
     ),
-    use_container_width=True,
+    width="stretch",
     hide_index=True,
 )
 
@@ -1325,7 +1497,7 @@ category_status = (
 
 st.dataframe(
     category_status,
-    use_container_width=True,
+    width="stretch",
 )
 
 
@@ -1397,7 +1569,7 @@ st.dataframe(
         "recovery_amount",
         ascending=False,
     ),
-    use_container_width=True,
+    width="stretch",
     hide_index=True,
 )
 

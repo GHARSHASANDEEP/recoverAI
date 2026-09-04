@@ -1,4 +1,5 @@
 import os
+from pathlib import Path
 
 import pandas as pd
 
@@ -6,22 +7,15 @@ from src.engine.baseline import (
     run_baseline_case,
 )
 
+BASE_DIR = Path(__file__).resolve().parents[2]
 
-DECISIONS_PATH = (
-    "data/unseen/processed/decisions.csv"
-)
+DECISIONS_PATH = BASE_DIR / "data" / "unseen" / "processed" / "decisions.csv"
 
-CASES_PATH = (
-    "data/unseen/processed/recovery_cases.csv"
-)
+CASES_PATH = BASE_DIR / "data" / "unseen" / "processed" / "recovery_cases.csv"
 
-CUSTOMERS_PATH = (
-    "data/raw/customers.csv"
-)
+CUSTOMERS_PATH = BASE_DIR / "data" / "unseen" / "raw" / "customers.csv"
 
-OUTPUT_PATH = (
-    "data/unseen/processed/baseline_results.csv"
-)
+OUTPUT_PATH = BASE_DIR / "data" / "unseen" / "processed" / "baseline_results.csv"
 
 
 def normalize_failure_category(value):
@@ -121,7 +115,14 @@ def main():
         customers[customer_columns],
         on="customer_id",
         how="left",
+        validate="many_to_one",
     )
+
+    if context["customer_segment"].isna().any():
+        raise ValueError(
+            "Unseen customer context is incomplete. "
+            "Every unseen recovery case must match an unseen customer."
+        )
 
     context["failure_category"] = (
         context[

@@ -3,7 +3,7 @@ import pandas as pd
 
 
 MODEL_PATH = (
-    "models/recovery_probability_model_v2.joblib"
+    "models/recovery_probability_model_v3.joblib"
 )
 
 
@@ -11,24 +11,21 @@ CATEGORICAL_FEATURES = [
     "failure_category",
     "customer_segment",
     "amount_bucket",
-    "action",
 ]
 
 
 NUMERIC_FEATURES = [
     "attempt_number",
-    "recovery_amount",
     "customer_lifetime_value",
     "successful_payment_count",
     "failed_payment_count",
     "total_payment_attempts",
     "historical_failure_rate",
     "communication_opt_in",
-    "customer_success_rate",
-    "failure_to_success_ratio",
-    "amount_to_lifetime_value_ratio",
-    "payment_history_volume",
 ]
+
+
+V3_FEATURE_COLUMNS = CATEGORICAL_FEATURES + NUMERIC_FEATURES
 
 
 # Load the model ONCE when this module is imported.
@@ -178,9 +175,7 @@ def prepare_features(
         ),
     }
 
-    return pd.DataFrame(
-        [row]
-    )
+    return pd.DataFrame([row])[V3_FEATURE_COLUMNS]
 
 
 def predict_recovery_probability(
