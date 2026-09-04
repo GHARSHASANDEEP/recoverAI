@@ -201,6 +201,156 @@ Razorpay webhook
   -> persisted event and workflow records
 ```
 
+## Five-Minute Pitch Recording
+
+Use the running dashboard at `http://localhost:8503`. Keep the browser and a
+terminal visible during the recording. The aim is to show one complete
+recovery decision, one safe refusal, and measurable business value.
+
+### 0:00-0:30 | The problem
+
+Say:
+
+> Revenue does not disappear in one way. Payments fail, checkouts are
+> abandoned, subscriptions halt, and invoices go overdue. A blind retry can
+> waste attempts or be unsafe for a risk decline. RecoverAI closes the loop
+> from detecting revenue risk to verified recovery or compliant escalation.
+
+Show the top dashboard banner and the system-flow graph above.
+
+### 0:30-1:10 | The result
+
+Show the top metrics and say:
+
+> On 3,262 isolated unseen cases, RecoverAI recovered 1,694 cases, or 51.93%,
+> and the one-retry baseline recovered 1,169 cases, or 35.84%. The benchmark
+> difference is INR 13,318,643.07.
+
+Point to these values:
+
+```text
+RecoverAI:          51.93% | INR 44,315,137.44
+One-retry baseline: 35.84% | INR 30,996,494.37
+Incremental value:                INR 13,318,643.07
+```
+
+Immediately add:
+
+> These are deterministic simulated benchmark outcomes, not real customer
+> revenue. They provide a reproducible comparison; production recovery would
+> be confirmed by Razorpay payment and settlement events.
+
+### 1:10-2:10 | AI decision and successful recovery
+
+Scroll to **Judge Mode** and enter:
+
+```text
+Failure category: temporary_bank_failure
+Recovery amount: INR 20,000
+Attempt number: 1
+Customer segment: regular
+Communication opted in: Yes
+Successful payments: 8
+Failed payments: 2
+Total payment attempts: 10
+Preferred channel: auto
+```
+
+Click **Run RecoverAI**. Show the action comparison, decision factors,
+priority score, message preview, final status, state path, and audit table.
+
+Say:
+
+> The case-level model estimates recoverability. The action model compares
+> retry, reminder, and escalation. Policy makes retry the safe first stage for
+> this diagnosis. The guardrails check expected value and attempt limits. The
+> agent executes, verifies, and records the transition. This is controlled
+> autonomy, not an unconstrained retry.
+
+### 2:10-2:50 | Safe refusal
+
+Run Judge Mode again with:
+
+```text
+Failure category: risk_decline
+Recovery amount: INR 20,000
+Attempt number: 1
+Customer segment: regular
+Communication opted in: Yes
+Successful payments: 8
+Failed payments: 2
+Total payment attempts: 10
+Preferred channel: auto
+```
+
+Say:
+
+> The model may see economic value, but it cannot authorize a retry here. The
+> failure-aware policy and guardrails block the unsafe action and route the
+> case to manual review. Every refusal is explainable and audited.
+
+### 2:50-3:40 | Razorpay proof
+
+Show the Razorpay Test Mode Payment Link marked paid, then show the webhook
+terminal with:
+
+```text
+POST /webhooks/razorpay HTTP/1.1 200
+```
+
+Say:
+
+> This is a real Test Mode integration check. Razorpay sent signed events
+> through the HTTPS webhook, RecoverAI verified the signature and event ID,
+> normalized the event, and created a recovery workflow record. Test Mode does
+> not move real customer money.
+
+Show the event and workflow files from the terminal:
+
+```powershell
+Get-Content .\data\processed\razorpay_webhook_events.jsonl
+Get-Content .\data\processed\razorpay_recovery_workflow.jsonl
+```
+
+Point out `payment_link_paid`, `status: recovered`, and `verified: true`.
+
+### 3:40-4:30 | How the AI is used
+
+Show the **Decision factors** table and say:
+
+> RecoverAI uses ML where prediction helps: case recoverability and
+> action-conditioned ranking. It uses deterministic policy where safety is
+> required: consent, risk categories, retry budgets, positive expected value,
+> stopping, and escalation. The provider is allowed to act only after those
+> checks, and verification is required before recovery is recorded.
+
+### 4:30-5:00 | Engineering judgment
+
+Say:
+
+> During testing, the first unseen run joined held-out cases to development
+> customers, so customer context silently became defaults. Later, the real
+> Razorpay Payment Link payload exposed a list-shaped notes field that the
+> parser had assumed was a dictionary. I traced both failures through the
+> request path, fixed the data join and payload handling, added fail-fast
+> validation, durable idempotency, and regression tests. The final suite has
+> 65 passing tests.
+
+Finish with:
+
+> RecoverAI is a measurable, policy-controlled revenue-recovery agent: it
+> recommends, acts within limits, verifies outcomes, and knows when to stop.
+
+### Recording Rules
+
+- Show the dashboard, not source code, during the first three minutes.
+- Show the action comparison and decision factors, not only the final action.
+- Show one successful case and one blocked `risk_decline` case.
+- Label every batch INR value as simulated benchmark recovery.
+- Label Razorpay as Test Mode integration, not live production processing.
+- Never show API keys, API secrets, webhook secrets, ngrok tokens, or private
+  customer information.
+
 ## Safety And Failure Handling
 
 Examples of the recovery policy:
