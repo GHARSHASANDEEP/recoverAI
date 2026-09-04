@@ -148,6 +148,16 @@ class WebhookHandler(BaseHTTPRequestHandler):
         if self.path == "/health":
             self._send_json(200, {"status": "ok"})
             return
+        if self.path == "/latest":
+            if not RECOVERY_LOG.exists():
+                self._send_json(200, {"status": "no_recovery_recorded"})
+                return
+            records = [
+                line for line in RECOVERY_LOG.read_text(encoding="utf-8").splitlines()
+                if line.strip()
+            ]
+            self._send_json(200, json.loads(records[-1]))
+            return
         if self.path == "/webhooks/razorpay":
             self._send_json(405, {
                 "error": "method_not_allowed",
