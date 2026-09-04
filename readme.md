@@ -59,6 +59,23 @@ prototype ranking signal, not a production-trained policy. Neither model
 overrides policy or guardrails. This keeps high-risk actions explainable and
 auditable.
 
+### Decision Ownership
+
+The system uses controlled autonomy rather than unconstrained automation:
+
+```text
+ML models recommend recoverability and next-best action
+	-> policy defines the permitted recovery sequence
+	-> guardrails enforce consent, safety, value, and attempt limits
+	-> provider adapter performs an approved side effect
+	-> Razorpay webhook verifies the outcome
+	-> recovery memory stores only verified provider feedback
+```
+
+This separation is intentional. The ML model cannot authorize a risky retry,
+contact an opted-out customer, bypass an attempt limit, or mark a payment
+recovered without a provider-confirmed event.
+
 ## Run The Demo
 
 ### Prerequisites
@@ -226,6 +243,25 @@ real-world payment success rates. A production deployment would replace it
 with verified Razorpay payment and settlement events. The action recommender
 also requires retraining or calibration on merchant outcomes before it can
 be used for production intervention ranking.
+
+## Submission Readiness
+
+The repository is ready for a Track 03 prototype submission. Demonstrate the
+following in the five-minute video:
+
+1. A `temporary_bank_failure` case that recovers through retry and verification.
+2. A `risk_decline` case where retry is blocked and manual escalation wins.
+3. A Razorpay Test Mode Payment Link marked paid and its signed webhook
+	returning HTTP 200.
+4. The unseen benchmark comparison: RecoverAI 51.93% recovery and INR 44.32M
+	versus the one-retry baseline at 35.84% and INR 31.00M.
+5. The explicit disclaimer that benchmark outcomes are simulated and Test
+	Mode is not production payment processing.
+
+The submission still requires a public GitHub repository, a five-minute
+unlisted video, eligibility confirmation, and rotation of any credentials
+that were exposed during local testing. The temporary ngrok URL is for the
+recording only; a production deployment needs a stable HTTPS host.
 
 ## Repository Map
 
