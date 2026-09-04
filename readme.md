@@ -196,9 +196,6 @@ channels, memory, webhook signatures, idempotency, and Razorpay event payloads. 
 Open `http://localhost:8501`. Start with **Judge Mode** — build any case and watch the full
 reasoning chain: diagnosis → ML scoring → policy → guardrail → channel → execution → audit trail.
 
-For the five-minute submission video, use [PITCH_GUIDE.md](PITCH_GUIDE.md). It contains the
-verified metrics, timed demo sequence, honest limitation statements, failure story, and judge Q&A.
-
 Try `risk_decline` to see a blocked retry. Try `temporary_bank_failure` to see a successful recovery.
 
 ### Regenerate the unseen evaluation
