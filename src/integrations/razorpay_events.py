@@ -7,6 +7,7 @@ not execute payments or send customer communications.
 import hashlib
 import hmac
 import json
+from threading import RLock
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -58,7 +59,7 @@ def verify_webhook_signature(
 
 
 class WebhookEventStore:
-    """Small in-memory idempotency store for webhook processing.
+    """Thread-safe local idempotency store for webhook processing.
 
     Replace this with a durable database or Redis store in production.
     """
@@ -66,6 +67,7 @@ class WebhookEventStore:
     def __init__(self, path: str | Path | None = None):
         self.path = Path(path) if path else None
         self._processed_ids = set()
+        self._lock = RLock()
         if self.path and self.path.exists():
             self._processed_ids = {
                 line.strip()
@@ -76,27 +78,29 @@ class WebhookEventStore:
     def claim(self, event_id: str) -> bool:
         """Claim an event ID; return False when it was already processed."""
 
-        if not event_id or event_id in self._processed_ids:
-            return False
+        with self._lock:
+            if not event_id or event_id in self._processed_ids:
+                return False
 
-        self._processed_ids.add(event_id)
-        if self.path:
-            self.path.parent.mkdir(parents=True, exist_ok=True)
-            with self.path.open("a", encoding="utf-8") as stream:
-                stream.write(event_id + "\n")
-        return True
+            self._processed_ids.add(event_id)
+            if self.path:
+                self.path.parent.mkdir(parents=True, exist_ok=True)
+                with self.path.open("a", encoding="utf-8") as stream:
+                    stream.write(event_id + "\n")
+            return True
 
     def release(self, event_id: str) -> None:
         """Release an event when downstream persistence fails before acceptance."""
 
-        self._processed_ids.discard(event_id)
-        if self.path and self.path.exists():
-            remaining = [
-                line
-                for line in self.path.read_text(encoding="utf-8").splitlines()
-                if line.strip() and line.strip() != event_id
-            ]
-            self.path.write_text("\n".join(remaining) + ("\n" if remaining else ""), encoding="utf-8")
+        with self._lock:
+            self._processed_ids.discard(event_id)
+            if self.path and self.path.exists():
+                remaining = [
+                    line
+                    for line in self.path.read_text(encoding="utf-8").splitlines()
+                    if line.strip() and line.strip() != event_id
+                ]
+                self.path.write_text("\n".join(remaining) + ("\n" if remaining else ""), encoding="utf-8")
 
 
 def parse_and_normalize_webhook(
