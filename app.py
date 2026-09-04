@@ -544,24 +544,6 @@ st.caption(
     "the failure-aware policy or safety guardrails."
 )
 
-scenario_options = [
-    "Custom case",
-    "Successful transient recovery",
-    "Blocked risk decline",
-]
-selected_scenario = st.selectbox(
-    "Demo scenario",
-    scenario_options,
-    help=(
-        "Use the two prepared scenarios for a predictable judge demonstration."
-    ),
-)
-
-scenario_failure = {
-    "Successful transient recovery": "temporary_bank_failure",
-    "Blocked risk decline": "risk_decline",
-}.get(selected_scenario)
-
 failure_options = get_unique_options(
     "failure_category",
     [
@@ -589,11 +571,6 @@ with st.form("judge_case_form"):
         judge_failure = st.selectbox(
             "Failure category",
             failure_options,
-            index=(
-                failure_options.index(scenario_failure)
-                if scenario_failure in failure_options
-                else 0
-            ),
         )
 
         judge_amount = st.number_input(
