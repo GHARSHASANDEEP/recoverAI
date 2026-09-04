@@ -93,6 +93,7 @@ def test_live_provider_builds_explicit_payment_link_payload():
             "case_id": "CASE_1",
             "recovery_amount": 1250.50,
             "customer_email": "customer@example.com",
+            "communication_opt_in": True,
         },
         "https://merchant.example/recovery/callback",
     )

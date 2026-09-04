@@ -44,6 +44,8 @@ rng = np.random.default_rng(RANDOM_SEED)
 fake = Faker("en_IN")
 fake.seed_instance(RANDOM_SEED)
 
+GENERATION_TIMESTAMP = pd.Timestamp("2026-08-26 00:00:00")
+
 
 # ---------------------------------------------------------
 # Payment configuration
@@ -245,7 +247,7 @@ def generate_payment_timestamp() -> pd.Timestamp:
     )
 
     return (
-        pd.Timestamp.now()
+        GENERATION_TIMESTAMP
         - pd.Timedelta(days=days_ago)
         - pd.Timedelta(minutes=minutes_ago)
     )
@@ -677,7 +679,7 @@ def generate_subscriptions(
         )
 
         created_at = (
-            pd.Timestamp.now()
+            GENERATION_TIMESTAMP
             - pd.Timedelta(
                 days=int(rng.integers(0, 181))
             )
@@ -932,7 +934,7 @@ def generate_checkouts(
             )
 
             created_at = (
-                pd.Timestamp.now()
+                GENERATION_TIMESTAMP
                 - pd.Timedelta(
                     days=int(
                         rng.integers(
@@ -1065,7 +1067,7 @@ def generate_invoices(
         )
 
         created_at = (
-            pd.Timestamp.now()
+            GENERATION_TIMESTAMP
             - pd.Timedelta(
                 days=int(
                     rng.integers(0, 181)

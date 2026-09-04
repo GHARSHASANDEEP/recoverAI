@@ -523,7 +523,50 @@ def run_recovery_case(
     )
 
     # --------------------------------------------------
-    # Adaptive recovery loop
+    # Confidence-gated escalation for high-value cases.
+    #
+    # Low confidence on a high-value case means the model
+    # is uncertain. Automated action on uncertain high-value
+    # cases is riskier than escalating to a human.
+    # This is the one place confidence changes behavior.
+    # --------------------------------------------------
+
+    HIGH_VALUE_THRESHOLD = 50000.0
+    LOW_CONFIDENCE_THRESHOLD = 0.40
+
+    is_high_value = float(
+        current_case.get("recovery_amount", 0.0)
+    ) >= HIGH_VALUE_THRESHOLD
+
+    is_low_confidence = (
+        initial_confidence["confidence_score"]
+        < LOW_CONFIDENCE_THRESHOLD
+    )
+
+    if is_high_value and is_low_confidence and initial_action not in (
+        "escalate", "stop"
+    ):
+        audit_events.append(
+            {
+                "timestamp": datetime.now().isoformat(),
+                "event": "confidence_gated_escalation",
+                "original_action": initial_action,
+                "confidence_score": initial_confidence["confidence_score"],
+                "recovery_amount": current_case.get("recovery_amount"),
+                "reason": (
+                    "Low model confidence on a high-value case. "
+                    "Automated action replaced with escalation to "
+                    "reduce risk of incorrect recovery attempt."
+                ),
+            }
+        )
+        current_case["final_action"] = "escalate"
+        current_case["decision_reason"] = (
+            f"Confidence-gated escalation: score "
+            f"{initial_confidence['confidence_score']:.3f} is below "
+            f"{LOW_CONFIDENCE_THRESHOLD} threshold on a "
+            f"₹{current_case.get('recovery_amount', 0):,.0f} case."
+        )
     # --------------------------------------------------
 
     while True:

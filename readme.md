@@ -1,75 +1,167 @@
 # RecoverAI
 
-RecoverAI is a controlled AI revenue-recovery agent built for Razorpay Buildathon Track 03, **AI Revenue Recovery**.
+**Razorpay Buildathon Track 03 — AI Revenue Recovery**
 
-When money is at risk, the problem is rarely just "retry the payment". A customer may have insufficient funds, a payment rail may time out, a checkout may be abandoned, a subscription may halt, or a risk decision may make a retry unsafe. RecoverAI turns those signals into a recovery case, chooses the next safe intervention, verifies the result, and escalates when automation should stop.
+RecoverAI recovered **51.93% of failed payments** versus **35.84% for a one-retry baseline** — a
+**+15.82 percentage-point improvement** — on 3,262 held-out unseen cases, recovering
+**₹44,315,137 simulated** versus ₹30,996,494 for the baseline, a difference of **₹13,318,643**.
 
-## What The Project Does
+> These are deterministic simulated benchmark outcomes on an isolated unseen population.
+> All customer identities, contact data, and payment records are synthetic. No real customer
+> money was moved. Strategy comparisons use the checked-in unseen files and are reproducible.
+> Production recovery is confirmed only by captured or paid Razorpay events, never authorization alone.
 
-RecoverAI brings payment failures, failed subscriptions, abandoned checkouts, and overdue invoices into one workflow:
+---
 
-```text
+## The Core Idea
+
+A payment failure is not a single problem. Insufficient funds needs a reminder. A timeout needs
+a retry. A risk decline must never be retried automatically. An expired instrument needs the
+customer to act first. A blocked instrument goes straight to manual review.
+
+RecoverAI diagnoses the failure, selects the safest action from a failure-aware policy, enforces
+deterministic guardrails, executes through a provider boundary, and verifies the outcome — all in
+a closed loop with a full audit trail.
+
+```
 revenue-risk event
-  -> normalized event and failure diagnosis
-  -> deduplicated recovery case
-  -> ML recoverability and action scoring
-  -> policy and consent guardrails
-  -> bounded execution
-  -> provider verification
-  -> recovered, stopped, or escalated
+  → normalize + diagnose failure
+  → build deduplicated recovery case
+  → V3 ML recoverability score
+  → action-conditioned recommender (retry vs reminder vs escalate)
+  → failure-aware policy sequence
+  → deterministic guardrails
+  → provider execution
+  → outcome verification
+  → recovered · escalated · stopped
 ```
 
-The system is autonomous within clear boundaries. ML recommends; policy defines the safe sequence; guardrails authorize or block; the provider executes; and a verified event confirms recovery. No model can retry a risk decline, contact an opted-out customer, exceed the attempt budget, or mark a payment recovered without confirmation.
+**ML recommends. Policy constrains. Guardrails authorize. Provider executes. Event verifies.**
 
-## The AI And The Rules
-
-There are two complementary model signals:
-
-- The V3 case-level model estimates whether a revenue-risk case is recoverable.
-- The action-conditioned recommender compares retry, reminder, and escalation for the current case context.
-
-The action recommender is trained on the synthetic benchmark's action rows. It is a prototype ranking signal, not a production-trained policy. This is intentional: a payment model should not be allowed to override consent, risk, retry limits, or merchant policy.
+---
 
 ## Measured Result
 
-The checked-in evaluation uses 3,262 isolated unseen cases. It compares RecoverAI with a one-retry baseline on the same population:
+| Strategy | Recovery rate | Cases recovered | Simulated recovery |
+|---|---:|---:|---:|
+| RecoverAI | 51.93% | 1,694 | ₹44,315,137 |
+| One-retry baseline | 35.84% | 1,169 | ₹30,996,494 |
+| Difference | **+15.82 pp** | **+525** | **+₹13,318,643** |
 
-| Strategy | Recovery rate | Recovered amount |
-| --- | ---: | ---: |
-| RecoverAI | 51.93% | INR 44,315,137.44 |
-| One-retry baseline | 35.84% | INR 30,996,494.37 |
-| Difference | +15.82 percentage points | INR 13,318,643.07 |
+RecoverAI also recorded 4,092 automated attempts, 1,480 safe escalations, and 88 stopped cases.
+Every transition has an audit event.
 
-RecoverAI recovered 1,694 cases versus 1,169 for the baseline. Its run also recorded 4,092 automated attempts, 1,480 escalations, and 88 stopped cases.
+---
 
-These amounts are **deterministic simulated benchmark outcomes**, not real customer revenue. The simulation makes strategy comparisons reproducible; production recovery would be confirmed by Razorpay payment and settlement events.
+## Why Not Just Use an LLM?
 
-## Razorpay Test Mode Integration
+Payment recovery requires deterministic safety guarantees. An LLM cannot be trusted to:
 
-The project includes a working Test Mode provider boundary:
+- Never retry a risk decline
+- Never contact an opted-out customer
+- Never exceed the attempt budget
+- Never mark a payment recovered without provider confirmation
 
-```text
-Razorpay Test Mode event
-  -> signed HTTPS webhook
-  -> signature verification
-  -> duplicate-event protection
-  -> RecoverAI normalization
-  -> recovery workflow decision
+RecoverAI uses ML where probability estimation adds value and deterministic rules where safety
+is non-negotiable. The two layers are explicitly separated and tested independently.
+
+---
+
+## The AI Layer
+
+Two complementary models:
+
+- **V3 recoverability model** (`HistGradientBoosting`, accuracy 0.810, ROC-AUC 0.732, PR-AUC 0.902)
+  estimates whether a revenue-risk case is recoverable.
+- **Action recommender V2** scores retry, reminder, and escalation for the current case context
+  using action-conditioned probability × amount − cost (Expected Recovery Value).
+
+Neither model can override consent, risk policy, retry limits, or merchant guardrails.
+The action recommender is a prototype ranking signal trained on the synthetic benchmark.
+A production deployment would retrain on verified merchant outcomes.
+
+---
+
+## The Safety Layer
+
+| Failure | First action | Recovery path |
+|---|---|---|
+| Temporary bank failure | Retry | Retry → reminder → escalate |
+| Timeout | Retry | Retry → reminder → escalate |
+| Insufficient funds | Reminder | Reminder → retry → escalate |
+| Authentication failure | Reminder | Reminder → retry → escalate |
+| Risk decline | Escalate | Escalate only — no retry |
+| Blocked instrument | Escalate | Escalate only — no retry |
+| Expired instrument | Reminder | Reminder → escalate |
+
+Guardrails that cannot be overridden by any model score:
+
+- Customer opted out → reminder blocked
+- `risk_decline` or `blocked_instrument` → retry blocked
+- Attempt limit reached → automated actions blocked, escalation allowed
+- ERV ≤ 0 → automated actions blocked, escalation allowed
+- High-value case (≥ ₹50,000) + low confidence (< 0.40) → confidence-gated escalation
+
+---
+
+## Razorpay Integration
+
+Working Test Mode provider boundary with HMAC-SHA256 signature verification, INR amount
+validation, consent checks, and event-ID idempotency before any case is created.
+
+Supported events: `payment.failed`, `payment.authorized`, `payment.captured`,
+`payment_link.paid`, `payment_link.expired`, `subscription.halted`, `invoice.expired`, `order.paid`.
+
+A `payment.failed` event becomes a `recovery_ready` case with a policy-selected next action.
+A `payment.captured` or `payment_link.paid` event becomes a verified `recovered` update, preserving
+the original recovery case ID from Payment Link notes. `payment.authorized` remains observed until capture.
+
+---
+
+## System Architecture
+
+```mermaid
+flowchart LR
+    A[Razorpay events<br/>payment.failed<br/>checkout abandoned<br/>subscription halted<br/>invoice overdue] --> B[Normalize + diagnose]
+    B --> C[Build recovery case]
+    C --> D[V3 ML<br/>Recoverability score]
+    C --> E[Action ML<br/>Retry vs reminder vs escalate]
+    D --> F[Failure-aware policy]
+    E --> F
+    F --> G{Deterministic guardrails}
+    G -->|Blocked| H[Stop or escalate]
+    G -->|Approved| I[Choose channel]
+    I --> J[Execute via provider]
+    J --> K[Verify outcome]
+    K -->|Recovered| L[Recovered revenue]
+    K -->|Not recovered| M[Reassess]
+    M --> F
+    L --> N[Audit trail + verified memory]
+    H --> N
 ```
 
-Supported events include `payment.failed`, `payment.authorized`, `payment.captured`, `payment_link.paid`, `payment_link.expired`, `subscription.halted`, `invoice.expired`, and `order.paid`.
+```mermaid
+sequenceDiagram
+    participant R as Razorpay Test Mode
+    participant W as Webhook receiver
+    participant A as RecoverAI agent
+    participant V as Verification event
 
-The receiver stores normalized events in `data/processed/razorpay_webhook_events.jsonl` and workflow results in `data/processed/razorpay_recovery_workflow.jsonl`. A failed payment becomes `recovery_ready` with a policy-selected next action. A captured, authorized, or paid event becomes a verified `recovered` update.
+    R->>W: Signed payment event
+    W->>W: Verify HMAC signature + event ID
+    W->>A: Normalize payment.failed
+    A->>A: Score → policy → guardrails
+    A->>A: Create recovery_ready workflow
+    V-->>A: payment.captured confirmation
+    A->>A: Persist audit + verified outcome
+```
 
-Test Mode webhook delivery was validated with successful HTTP 200 responses. Test Mode is used deliberately: it does not process real customer money. The optional live Payment Link client is isolated behind credentials, consent, callback, timeout, idempotency, and settlement-verification controls.
+---
 
 ## Run It Locally
 
-The repository contains generated raw data, unseen data, trained model artifacts, and processed evaluation outputs, so the dashboard can be run without access to private merchant data.
-
-### Install
-
-Python 3.11 or newer is recommended.
+Python 3.11+ recommended. All data, model artifacts, and evaluation outputs are checked in —
+the dashboard runs without any external credentials.
 
 ```powershell
 git clone https://github.com/GHARSHASANDEEP/recoverAI.git
@@ -79,32 +171,34 @@ python -m venv .venv
 python -m pip install -r requirements.txt
 ```
 
-On macOS or Linux:
-
 ```bash
-python3 -m venv .venv
-source .venv/bin/activate
+# macOS / Linux
+python3 -m venv .venv && source .venv/bin/activate
 python -m pip install -r requirements.txt
 ```
 
-### Run Tests
+### Run tests
 
 ```powershell
 .\.venv\Scripts\python.exe -m pytest -q
 .\.venv\Scripts\python.exe -m compileall -q app.py src
 ```
 
-The current suite contains 65 tests covering policy, guardrails, state transitions, unseen-data joins, action scoring, channels, memory, webhook signatures, idempotency, and Razorpay event payloads.
+87 tests covering policy, guardrails, state transitions, unseen-data joins, action scoring,
+channels, memory, webhook signatures, idempotency, and Razorpay event payloads. 0 failures.
 
-### Run The Dashboard
+### Run the dashboard
 
 ```powershell
 .\.venv\Scripts\python.exe -m streamlit run app.py
 ```
 
-Open `http://localhost:8501`. Judge Mode demonstrates a successful temporary bank-failure recovery, action comparison, state path, verification, audit trail, and a blocked `risk_decline` retry.
+Open `http://localhost:8501`. Start with **Judge Mode** — build any case and watch the full
+reasoning chain: diagnosis → ML scoring → policy → guardrail → channel → execution → audit trail.
 
-### Regenerate The Unseen Evaluation
+Try `risk_decline` to see a blocked retry. Try `temporary_bank_failure` to see a successful recovery.
+
+### Regenerate the unseen evaluation
 
 ```powershell
 .\.venv\Scripts\python.exe -m src.data.unseen_generator
@@ -115,123 +209,45 @@ Open `http://localhost:8501`. Judge Mode demonstrates a successful temporary ban
 .\.venv\Scripts\python.exe -m src.engine.unseen_baseline_batch
 ```
 
-### Run The Test Webhook Receiver
-
-The Streamlit dashboard is separate from the webhook receiver. To test a Razorpay Test Mode webhook, set the secret in the terminal without putting it in source control:
+### Run the webhook receiver
 
 ```powershell
 .\run_webhook.ps1 -WebhookSecret "YOUR_RAZORPAY_WEBHOOK_SECRET"
 ```
 
-The receiver listens on `http://127.0.0.1:8000`. Its routes are:
+Listens on `http://127.0.0.1:8000`. Routes: `GET /health`, `POST /webhooks/razorpay`.
+Expose via an authenticated HTTPS tunnel and register the URL in Razorpay Test Mode. The
+receiver is intentionally observation-only: it verifies and records provider events; a caller
+must separately invoke the Test Mode payment-link provider after policy approval.
 
-```text
-GET  /health
-POST /webhooks/razorpay
-```
-
-For Razorpay to reach a local receiver, expose port 8000 through an authenticated HTTPS tunnel. Register the tunnel URL plus `/webhooks/razorpay` in Razorpay Test Mode. The tunnel URL is temporary and only works while the receiver and tunnel processes are running.
-
-## System Flow
-
-This is the architecture graph to use in the pitch and demo:
-
-```mermaid
-flowchart LR
-   A[Razorpay events<br/>payment.failed<br/>checkout abandoned<br/>subscription halted<br/>invoice overdue] --> B[Normalize events]
-   B --> C[Diagnose failure]
-   C --> D[Build recovery case]
-   D --> E[V3 AI<br/>Recoverability score]
-   D --> F[Action AI<br/>Retry vs reminder vs escalation]
-   E --> G[Policy engine]
-   F --> G
-   G --> H{Guardrails}
-   H -->|Blocked or unsafe| I[Stop or manual escalation]
-   H -->|Approved| J[Choose channel and action]
-   J --> K[Execute provider action]
-   K --> L[Verify payment outcome]
-   L -->|Recovered| M[Recovered revenue]
-   L -->|Not recovered| N[Reassess]
-   N --> G
-   M --> O[Audit trail and verified memory]
-   I --> O
-```
-
-The real-time Razorpay path is:
-
-```mermaid
-sequenceDiagram
-   participant R as Razorpay Test Mode
-   participant W as Webhook receiver
-   participant A as RecoverAI agent
-   participant V as Verification event
-
-   R->>W: Signed payment event
-   W->>W: Verify signature and event ID
-   W->>A: Normalize payment.failed or payment_link.paid
-   A->>A: Score, apply policy, enforce guardrails
-   A->>A: Create recovery_ready or recovered workflow
-   V-->>A: Captured or paid confirmation
-   A->>A: Persist audit and verified outcome
-```
-
-The batch evaluation path uses the same decision logic on an isolated unseen
-population and compares the agent with a one-retry baseline.
-
-The held-out submission path uses separate unseen inputs:
-
-```text
-unseen_generator
-  -> unseen_case_builder
-  -> unseen_erv_batch
-  -> unseen_decision_batch
-  -> unseen_agent_batch
-  -> unseen_baseline_batch
-  -> data/unseen/processed/*.csv
-```
-
-The live Test Mode event path is independent of the batch benchmark:
-
-```text
-Razorpay webhook
-  -> raw-body signature verification
-  -> provider event-ID idempotency
-  -> event normalization
-  -> recovery_ready or recovered workflow
-  -> persisted event and workflow records
-```
-
-## Safety And Failure Handling
-
-Examples of the recovery policy:
-
-| Failure | First response | Recovery path |
-| --- | --- | --- |
-| Temporary bank failure | Retry | Retry, reminder, escalation |
-| Timeout | Retry | Retry, reminder, escalation |
-| Insufficient funds | Reminder | Reminder, retry, escalation |
-| Authentication failure | Reminder | Reminder, retry, escalation |
-| Risk decline | Manual review | Escalation only |
-| Blocked instrument | Manual review | Escalation only |
-| Expired instrument | Reminder | Reminder, retry, escalation |
-
-The agent stops or escalates when communication is not permitted, the action has non-positive expected value, the recovery path is exhausted, or the failure category makes automation unsafe. Every transition is recorded for review.
-
-## Learning Boundary
-
-`src/model/recovery_memory.py` accepts only explicitly verified provider outcomes. It records action results and summarizes customer recovery history for future calibration. Simulator results are never silently written as merchant feedback. A production deployment would retrain or calibrate the action recommender using verified merchant outcomes.
+---
 
 ## Repository Map
 
-- `app.py`: Streamlit dashboard and Judge Mode
-- `src/data`: generators, taxonomy, and benchmark outcome simulator
-- `src/engine`: normalization, case building, policy, guardrails, agent, and batch evaluation
-- `src/model`: model training, prediction, action recommendation, and memory
-- `src/integrations`: Razorpay events, webhook server, and provider boundary
-- `tests`: business-logic and integration regression tests
-- `models`: trained model artifacts and V3 evaluation report
-- `data`: raw, unseen, processed, and evaluation data
+| Path | Contents |
+|---|---|
+| `app.py` | Streamlit dashboard — hero KPIs, Judge Mode, baseline comparison, audit timeline |
+| `src/engine/` | Normalization, case building, policy, guardrails, ERV, agent, batch evaluation |
+| `src/model/` | V3 training, V2 action recommender, confidence scoring, recovery memory |
+| `src/integrations/` | Razorpay webhook receiver, event normalization, provider boundary |
+| `src/data/` | Generators, taxonomy, outcome simulator |
+| `tests/` | 87 regression tests |
+| `models/` | Trained artifacts + V3 evaluation report |
+| `data/unseen/processed/` | Held-out evaluation outputs |
+
+---
+
+## Learning Boundary
+
+`src/model/recovery_memory.py` accepts only explicitly verified provider outcomes.
+Simulator results are never silently written as merchant feedback.
+A production deployment would retrain the action recommender on verified merchant outcomes.
+
+---
 
 ## Project Status
 
-RecoverAI is a working Track 03 prototype with a reproducible unseen benchmark, a Test Mode Razorpay webhook receiver, policy-controlled agent execution, and 65 passing tests. It does not claim that simulated benchmark money is real revenue or that Test Mode is production processing.
+Working Track 03 prototype. Reproducible unseen benchmark. Test Mode Razorpay webhook receiver.
+Policy-controlled agent. 82 passing tests. 0 compile errors.
+
+Does not claim simulated benchmark money is real revenue or that Test Mode is production processing.

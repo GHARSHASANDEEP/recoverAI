@@ -86,6 +86,18 @@ class WebhookEventStore:
                 stream.write(event_id + "\n")
         return True
 
+    def release(self, event_id: str) -> None:
+        """Release an event when downstream persistence fails before acceptance."""
+
+        self._processed_ids.discard(event_id)
+        if self.path and self.path.exists():
+            remaining = [
+                line
+                for line in self.path.read_text(encoding="utf-8").splitlines()
+                if line.strip() and line.strip() != event_id
+            ]
+            self.path.write_text("\n".join(remaining) + ("\n" if remaining else ""), encoding="utf-8")
+
 
 def parse_and_normalize_webhook(
     raw_body: bytes,
@@ -101,10 +113,11 @@ def parse_and_normalize_webhook(
 
     payload = json.loads(raw_body.decode("utf-8"))
     provider_event_id = event_id or str(payload.get("id", ""))
+    event = normalize_webhook(payload)
     if not event_store.claim(provider_event_id):
         return None
-
-    return normalize_webhook(payload)
+    event["delivery_id"] = provider_event_id
+    return event
 
 
 def _entity(payload: dict) -> dict:
@@ -166,6 +179,10 @@ def normalize_webhook(payload: dict) -> dict:
     amount = _amount_inr(entity)
     if entity.get("amount_unit") == "INR":
         amount = float(entity.get("amount", 0.0))
+    if str(entity.get("currency", "INR")).upper() != "INR":
+        raise ValueError("Only INR Razorpay events are supported")
+    if amount < 0:
+        raise ValueError("Razorpay event amount cannot be negative")
 
     created_at = entity.get("created_at", payload.get("created_at"))
     if created_at is None:
@@ -185,6 +202,7 @@ def normalize_webhook(payload: dict) -> dict:
     return {
         "customer_id": str(customer_id),
         "event_id": str(entity.get("id") or payload.get("id") or "unknown"),
+        "case_id": str(notes.get("case_id") or entity.get("id") or payload.get("id") or "unknown"),
         "surface": surface,
         "event_type": event_type,
         "event_amount": amount,

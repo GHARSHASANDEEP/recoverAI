@@ -20,6 +20,7 @@ from src.integrations.razorpay_events import (
     parse_and_normalize_webhook,
 )
 from src.engine.recovery_policy import get_initial_action
+from src.model.recovery_memory import append_verified_outcome
 
 
 HOST = os.environ.get("RECOVERAI_WEBHOOK_HOST", "127.0.0.1")
@@ -57,18 +58,22 @@ def process_webhook(
     if event is None:
         return {"status": "duplicate"}
 
-    EVENT_LOG.parent.mkdir(parents=True, exist_ok=True)
-    with EVENT_LOG.open("a", encoding="utf-8") as stream:
-        stream.write(
-            json.dumps(
-                {
-                    "received_at": datetime.now(timezone.utc).isoformat(),
-                    "event": event,
-                },
-                sort_keys=True,
+    try:
+        EVENT_LOG.parent.mkdir(parents=True, exist_ok=True)
+        with EVENT_LOG.open("a", encoding="utf-8") as stream:
+            stream.write(
+                json.dumps(
+                    {
+                        "received_at": datetime.now(timezone.utc).isoformat(),
+                        "event": event,
+                    },
+                    sort_keys=True,
+                )
+                + "\n"
             )
-            + "\n"
-        )
+    except Exception:
+        _EVENT_STORE.release(event["delivery_id"])
+        raise
 
     recovery_status = "observed"
     next_action = None
@@ -78,12 +83,26 @@ def process_webhook(
     }:
         recovery_status = "recovery_ready"
         next_action = get_initial_action(event["failure_category"])
-    elif event["event_status"] in {"authorized", "captured", "paid"}:
+    elif event["event_status"] in {"captured", "paid"}:
+        try:
+            append_verified_outcome({
+                "case_id": event["case_id"],
+                "event_id": event["delivery_id"],
+                "customer_id": event["customer_id"],
+                "action": "payment_link",
+                "recovered": True,
+                "verified_at": datetime.now(timezone.utc).isoformat(),
+                "amount": event["event_amount"],
+                "source": "razorpay_webhook",
+            })
+        except Exception:
+            _EVENT_STORE.release(event["delivery_id"])
+            raise
         recovery_status = "recovered"
 
     workflow = {
         "received_at": datetime.now(timezone.utc).isoformat(),
-        "case_id": event["event_id"],
+        "case_id": event["case_id"],
         "event_id": event["event_id"],
         "event_type": event["event_type"],
         "customer_id": event["customer_id"],
@@ -92,8 +111,12 @@ def process_webhook(
         "verified": recovery_status == "recovered",
         "execution_mode": "provider_webhook_observation",
     }
-    with RECOVERY_LOG.open("a", encoding="utf-8") as stream:
-        stream.write(json.dumps(workflow, sort_keys=True) + "\n")
+    try:
+        with RECOVERY_LOG.open("a", encoding="utf-8") as stream:
+            stream.write(json.dumps(workflow, sort_keys=True) + "\n")
+    except Exception:
+        _EVENT_STORE.release(event["delivery_id"])
+        raise
 
     return {
         "status": "accepted",

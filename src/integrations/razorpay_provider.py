@@ -5,6 +5,7 @@ explicitly construct it with credentials and choose when to create a payment
 link for an approved retry or reminder action.
 """
 
+import hashlib
 from dataclasses import dataclass
 
 import requests
@@ -31,6 +32,8 @@ class RazorpayLiveProvider:
         amount = float(case.get("recovery_amount", 0.0))
         if amount <= 0:
             raise ValueError("recovery_amount must be positive")
+        if not bool(case.get("communication_opt_in", False)):
+            raise ValueError("Cannot create payment link: customer has not opted in")
 
         customer = {}
         if case.get("customer_name"):
@@ -65,6 +68,11 @@ class RazorpayLiveProvider:
             f"{self.base_url}/payment_links",
             auth=(self.config.key_id, self.config.key_secret),
             json=self.build_payment_link_payload(case, callback_url),
+            headers={
+                "Idempotency-Key": hashlib.sha256(
+                    f"{case.get('case_id', 'recovery')}:reminder".encode()
+                ).hexdigest()[:32],
+            },
             timeout=self.timeout_seconds,
         )
         response.raise_for_status()

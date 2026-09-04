@@ -1,162 +1,122 @@
 # RecoverAI - Synthetic Outcome Rules
 #
 # IMPORTANT:
-# These probabilities represent the behavior of our synthetic
-# benchmark environment. They are NOT real Razorpay statistics.
+# These probabilities define the hidden synthetic benchmark environment.
+# They are NOT real Razorpay statistics and are NOT exposed to the
+# RecoverAI decision engine. The agent must estimate these through ML.
 #
-# RecoverAI does not receive these probabilities as input when
-# making its recovery decision.
+# There is ONE authoritative probability table: HIDDEN_RECOVERY_PROBABILITIES.
+# get_hidden_recovery_probability() applies segment, amount, and attempt
+# adjustments on top of it. The legacy BASE_RECOVERY_PROBABILITIES table
+# below is kept only for backward compatibility with older batch scripts
+# and is NOT used by the live agent or unseen evaluation.
+
+import hashlib
 
 
-# Base probability that a recovery action succeeds,
-# conditioned on failure category and action.
-BASE_RECOVERY_PROBABILITIES = {
+# Single authoritative hidden probability table used by the simulator.
+HIDDEN_RECOVERY_PROBABILITIES = {
     "temporary_bank_failure": {
+        "retry": 0.85,
+        "reminder": 0.60,
+        "escalate": 0.70,
+        "stop": 0.00,
+    },
+    "timeout": {
         "retry": 0.78,
         "reminder": 0.55,
         "escalate": 0.65,
         "stop": 0.00,
     },
-
-    "timeout": {
-        "retry": 0.72,
-        "reminder": 0.45,
-        "escalate": 0.60,
-        "stop": 0.00,
-    },
-
     "insufficient_funds": {
-        "retry": 0.35,
-        "reminder": 0.62,
-        "escalate": 0.55,
-        "stop": 0.00,
-    },
-
-    "authentication_failed": {
         "retry": 0.25,
-        "reminder": 0.58,
+        "reminder": 0.62,
         "escalate": 0.50,
         "stop": 0.00,
     },
-
+    "authentication_failed": {
+        "retry": 0.20,
+        "reminder": 0.58,
+        "escalate": 0.45,
+        "stop": 0.00,
+    },
     "expired_instrument": {
         "retry": 0.08,
-        "reminder": 0.68,
-        "escalate": 0.55,
+        "reminder": 0.52,
+        "escalate": 0.48,
         "stop": 0.00,
     },
-
     "blocked_instrument": {
         "retry": 0.05,
-        "reminder": 0.20,
-        "escalate": 0.45,
+        "reminder": 0.35,
+        "escalate": 0.40,
         "stop": 0.00,
     },
-
     "risk_decline": {
         "retry": 0.02,
-        "reminder": 0.10,
-        "escalate": 0.25,
+        "reminder": 0.15,
+        "escalate": 0.10,
         "stop": 0.00,
     },
-
     "limit_exceeded": {
-        "retry": 0.15,
-        "reminder": 0.50,
-        "escalate": 0.55,
+        "retry": 0.12,
+        "reminder": 0.40,
+        "escalate": 0.35,
         "stop": 0.00,
     },
-
     "unknown_failure": {
-        "retry": 0.30,
-        "reminder": 0.35,
-        "escalate": 0.45,
+        "retry": 0.35,
+        "reminder": 0.45,
+        "escalate": 0.40,
         "stop": 0.00,
     },
 }
 
-
-# Customer-segment adjustment.
-#
-# This creates realistic behavioral differences:
-# high-value and established customers tend to have
-# stronger historical payment relationships.
-CUSTOMER_SEGMENT_ADJUSTMENTS = {
-    "new": -0.08,
-    "regular": 0.00,
-    "high_value": 0.07,
-}
+# Kept for backward compatibility only. Not used by the live agent.
+BASE_RECOVERY_PROBABILITIES = HIDDEN_RECOVERY_PROBABILITIES
 
 
-def get_base_recovery_probability(
-    failure_category: str,
-    action: str,
-) -> float:
-    """
-    Return the synthetic world's base probability of recovery
-    for a given failure category and action.
-    """
-
-    category_rules = BASE_RECOVERY_PROBABILITIES.get(
-        failure_category,
-        BASE_RECOVERY_PROBABILITIES["unknown_failure"],
-    )
-
-    return category_rules.get(action, 0.0)
-
-
-def get_customer_adjustment(customer_segment: str) -> float:
-    """
-    Return the synthetic behavioral adjustment associated
-    with the customer's segment.
-    """
-
-    return CUSTOMER_SEGMENT_ADJUSTMENTS.get(
-        customer_segment,
-        0.0,
-    )
-
-
-def calculate_hidden_recovery_probability(
-    failure_category: str,
+def get_hidden_recovery_probability(
+    failure_category: str | None,
     action: str,
     customer_segment: str,
-    previous_failures: int = 0,
+    amount: float,
     attempt_number: int = 1,
 ) -> float:
     """
-    Calculate the hidden probability used by the synthetic
-    environment to determine whether a recovery succeeds.
+    Return the hidden synthetic ground-truth probability.
 
-    This value is NOT exposed to the RecoverAI decision engine.
+    This value represents the simulated world, NOT a model
+    prediction. It must never be passed directly to the
+    decision engine.
     """
 
-    probability = get_base_recovery_probability(
-        failure_category,
-        action,
+    category = (
+        failure_category
+        if failure_category in HIDDEN_RECOVERY_PROBABILITIES
+        else "unknown_failure"
     )
 
-    probability += get_customer_adjustment(
-        customer_segment
-    )
+    probability = HIDDEN_RECOVERY_PROBABILITIES[category].get(action, 0.0)
 
-    # Repeated failures reduce the likelihood of another
-    # successful intervention.
-    probability -= min(
-        previous_failures * 0.04,
-        0.16,
-    )
+    segment_adjustment = {
+        "high_value": 0.05,
+        "regular": 0.00,
+        "new": -0.05,
+    }
+    probability += segment_adjustment.get(customer_segment, 0.0)
 
-    # Repeated attempts also reduce recovery likelihood.
-    probability -= min(
-        max(attempt_number - 1, 0) * 0.05,
-        0.15,
-    )
+    if amount >= 100000:
+        probability -= 0.05
+    elif amount >= 25000:
+        probability -= 0.02
 
-    # Keep the probability within [0, 1].
-    return max(0.0, min(1.0, probability))
+    if attempt_number >= 2:
+        probability -= 0.10
+    if attempt_number >= 3:
+        probability -= 0.15
 
-import hashlib
+    return round(max(0.0, min(1.0, probability)), 4)
 
 
 ACTION_COSTS = {
@@ -220,139 +180,5 @@ def stable_random_value(
         16,
     )
 
-    return (
-        integer_value
-        / float(16**16)
-    )
+    return integer_value / float(16**16)
 
-def get_hidden_recovery_probability(
-    failure_category: str | None,
-    action: str,
-    customer_segment: str,
-    amount: float,
-    attempt_number: int = 1,
-) -> float:
-    """
-    Return the hidden synthetic ground-truth probability.
-
-    This value represents the simulated world, NOT a model
-    prediction. It must never be passed directly to the
-    decision engine.
-    """
-
-    base_probabilities = {
-        "temporary_bank_failure": {
-            "retry": 0.85,
-            "reminder": 0.60,
-            "escalate": 0.70,
-            "stop": 0.00,
-        },
-        "timeout": {
-            "retry": 0.78,
-            "reminder": 0.55,
-            "escalate": 0.65,
-            "stop": 0.00,
-        },
-        "insufficient_funds": {
-            "retry": 0.25,
-            "reminder": 0.62,
-            "escalate": 0.50,
-            "stop": 0.00,
-        },
-        "authentication_failed": {
-            "retry": 0.20,
-            "reminder": 0.58,
-            "escalate": 0.45,
-            "stop": 0.00,
-        },
-        "expired_instrument": {
-            "retry": 0.08,
-            "reminder": 0.52,
-            "escalate": 0.48,
-            "stop": 0.00,
-        },
-        "blocked_instrument": {
-            "retry": 0.05,
-            "reminder": 0.35,
-            "escalate": 0.40,
-            "stop": 0.00,
-        },
-        "risk_decline": {
-            "retry": 0.02,
-            "reminder": 0.15,
-            "escalate": 0.10,
-            "stop": 0.00,
-        },
-        "limit_exceeded": {
-            "retry": 0.12,
-            "reminder": 0.40,
-            "escalate": 0.35,
-            "stop": 0.00,
-        },
-        "unknown_failure": {
-            "retry": 0.35,
-            "reminder": 0.45,
-            "escalate": 0.40,
-            "stop": 0.00,
-        },
-    }
-
-    category = (
-        failure_category
-        if failure_category
-        in base_probabilities
-        else "unknown_failure"
-    )
-
-    probability = base_probabilities[
-        category
-    ].get(
-        action,
-        0.0,
-    )
-
-    # ---------------------------------------------
-    # Customer segment adjustment
-    # ---------------------------------------------
-
-    segment_adjustment = {
-        "high_value": 0.05,
-        "regular": 0.00,
-        "new": -0.05,
-    }
-
-    probability += segment_adjustment.get(
-        customer_segment,
-        0.0,
-    )
-
-    # ---------------------------------------------
-    # Large amounts are slightly harder to recover.
-    # ---------------------------------------------
-
-    if amount >= 100000:
-        probability -= 0.05
-
-    elif amount >= 25000:
-        probability -= 0.02
-
-    # ---------------------------------------------
-    # Repeated retries become less effective.
-    # ---------------------------------------------
-
-    if attempt_number >= 2:
-        probability -= 0.10
-
-    if attempt_number >= 3:
-        probability -= 0.15
-
-    return round(
-        max(
-            0.0,
-            min(
-                1.0,
-                probability,
-            ),
-        ),
-        4,
-    )

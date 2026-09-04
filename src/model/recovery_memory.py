@@ -36,6 +36,11 @@ def append_verified_outcome(
 
     destination = Path(path)
     destination.parent.mkdir(parents=True, exist_ok=True)
+    event_id = outcome.get("event_id")
+    if event_id:
+        existing = load_verified_outcomes(destination)
+        if any(str(record.get("event_id")) == str(event_id) for record in existing):
+            return
     with destination.open("a", encoding="utf-8") as stream:
         stream.write(json.dumps(outcome, sort_keys=True) + "\n")
 

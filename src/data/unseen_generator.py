@@ -357,7 +357,7 @@ def generate_unseen_dataset():
         "checkouts": len(checkouts),
         "invoices": len(invoices),
         "generated_at": (
-            pd.Timestamp.now().isoformat()
+            base_generator.GENERATION_TIMESTAMP.isoformat()
         ),
     }
 
