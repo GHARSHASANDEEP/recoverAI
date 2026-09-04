@@ -514,6 +514,24 @@ st.caption(
     "the failure-aware policy or safety guardrails."
 )
 
+scenario_options = [
+    "Custom case",
+    "Successful transient recovery",
+    "Blocked risk decline",
+]
+selected_scenario = st.selectbox(
+    "Demo scenario",
+    scenario_options,
+    help=(
+        "Use the two prepared scenarios for a predictable judge demonstration."
+    ),
+)
+
+scenario_failure = {
+    "Successful transient recovery": "temporary_bank_failure",
+    "Blocked risk decline": "risk_decline",
+}.get(selected_scenario)
+
 failure_options = get_unique_options(
     "failure_category",
     [
@@ -541,6 +559,11 @@ with st.form("judge_case_form"):
         judge_failure = st.selectbox(
             "Failure category",
             failure_options,
+            index=(
+                failure_options.index(scenario_failure)
+                if scenario_failure in failure_options
+                else 0
+            ),
         )
 
         judge_amount = st.number_input(
@@ -562,6 +585,12 @@ with st.form("judge_case_form"):
         judge_segment = st.selectbox(
             "Customer segment",
             segment_options,
+        )
+
+        judge_channel = st.selectbox(
+            "Preferred recovery channel",
+            ["auto", "whatsapp", "sms", "email"],
+            help="Used for consent-aware reminder delivery previews.",
         )
 
         judge_opt_in = st.checkbox(
@@ -666,6 +695,9 @@ if submitted:
             ),
             "amount_bucket": get_amount_bucket(
                 float(judge_amount)
+            ),
+            "preferred_channel": (
+                "" if judge_channel == "auto" else judge_channel
             ),
         }
 
