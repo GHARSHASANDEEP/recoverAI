@@ -391,6 +391,33 @@ st.caption(
     "guardrails authorize, and provider events verify the result."
 )
 
+st.divider()
+st.subheader("Outcome control")
+outcome_col1, outcome_col2, outcome_col3 = st.columns(3)
+outcome_rates = {
+    "Recovered": headline_recovered / headline_cases
+    if headline_cases
+    else 0.0,
+    "Escalated": float(
+        (data["final_status"] == "escalated").sum()
+    ) / headline_cases
+    if headline_cases
+    else 0.0,
+    "Stopped safely": float(
+        (data["final_status"] == "stopped").sum()
+    ) / headline_cases
+    if headline_cases
+    else 0.0,
+}
+
+for column, (label, rate) in zip(
+    [outcome_col1, outcome_col2, outcome_col3],
+    outcome_rates.items(),
+):
+    with column:
+        st.metric(label, f"{rate:.1%}")
+        st.progress(rate, text="Same unseen population")
+
 
 # =========================================================
 # Unseen evaluation summary
