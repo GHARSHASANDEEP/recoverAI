@@ -132,100 +132,51 @@ POST /webhooks/razorpay
 
 For Razorpay to reach a local receiver, expose port 8000 through an authenticated HTTPS tunnel. Register the tunnel URL plus `/webhooks/razorpay` in Razorpay Test Mode. The tunnel URL is temporary and only works while the receiver and tunnel processes are running.
 
-## Repository Structure
+## System Flow
 
-```text
-recoverAI/
-|-- app.py                              # Streamlit dashboard and Judge Mode
-|-- requirements.txt                    # Pinned Python dependencies
-|-- run_webhook.ps1                     # Starts the webhook receiver
-|-- train_recoverability_model_v3.py    # Trains the V3 model
-|-- score_recoverability_v3.py          # Scores development cases
-|-- readme.md                           # Project documentation
-|
-|-- src/
-|   |-- data/
-|   |   |-- config.py                    # Seeds, sizes, policy constants
-|   |   |-- generator.py                 # Development data generator
-|   |   |-- unseen_generator.py          # Held-out population generator
-|   |   |-- taxonomy.py                  # Failure categories and code mapping
-|   |   |-- outcome_rules.py             # Synthetic benchmark rules
-|   |   `-- outcome_simulator.py         # Deterministic outcomes
-|   |
-|   |-- engine/
-|   |   |-- normalizer.py                # Common event schema
-|   |   |-- deduplicator.py              # Payment/checkout matching
-|   |   |-- case_builder.py              # Recovery case construction
-|   |   |-- recovery_policy.py           # Failure-aware action sequence
-|   |   |-- decision_engine.py           # Guardrails and decisions
-|   |   |-- recovery_agent.py            # Closed-loop agent
-|   |   |-- recovery_state_machine.py    # Lifecycle transitions
-|   |   |-- executor.py                  # Execution and verification
-|   |   |-- channel_policy.py             # Consent-aware channel selection
-|   |   `-- *_batch.py                   # Batch pipeline entry points
-|   |
-|   |-- model/
-|   |   |-- training_data.py             # Training-row construction
-|   |   |-- predictor.py                 # Shared prediction interface
-|   |   |-- action_recommender.py        # Action-conditioned scoring
-|   |   `-- recovery_memory.py           # Verified-outcome feedback
-|   |
-|   `-- integrations/
-|       |-- razorpay_events.py           # Signature and event normalization
-|       |-- webhook_server.py            # Local HTTP webhook receiver
-|       |-- razorpay_provider.py          # Optional Payment Link client
-|       `-- provider_boundary.py         # Live side-effect boundary
-|
-|-- data/
-|   |-- raw/                             # Development source datasets
-|   |-- processed/                       # Development cases and reports
-|   `-- unseen/                          # Isolated held-out population
-|       |-- raw/
-|       `-- processed/
-|
-|-- models/                              # Saved models and reports
-`-- tests/                               # Unit and integration tests
+This is the architecture graph to use in the pitch and demo:
+
+```mermaid
+flowchart LR
+   A[Razorpay events<br/>payment.failed<br/>checkout abandoned<br/>subscription halted<br/>invoice overdue] --> B[Normalize events]
+   B --> C[Diagnose failure]
+   C --> D[Build recovery case]
+   D --> E[V3 AI<br/>Recoverability score]
+   D --> F[Action AI<br/>Retry vs reminder vs escalation]
+   E --> G[Policy engine]
+   F --> G
+   G --> H{Guardrails}
+   H -->|Blocked or unsafe| I[Stop or manual escalation]
+   H -->|Approved| J[Choose channel and action]
+   J --> K[Execute provider action]
+   K --> L[Verify payment outcome]
+   L -->|Recovered| M[Recovered revenue]
+   L -->|Not recovered| N[Reassess]
+   N --> G
+   M --> O[Audit trail and verified memory]
+   I --> O
 ```
 
-## End-To-End Pipeline
+The real-time Razorpay path is:
 
-The development pipeline runs from raw revenue-risk data to a measured
-agent-versus-baseline result:
+```mermaid
+sequenceDiagram
+   participant R as Razorpay Test Mode
+   participant W as Webhook receiver
+   participant A as RecoverAI agent
+   participant V as Verification event
 
-```text
-1. Generate source data
-  src.data.generator -> data/raw/*.csv
-
-2. Normalize failed payments, failed subscriptions,
-  abandoned checkouts, and overdue invoices
-  -> unified actionable event schema
-
-3. Match related payment and checkout events
-  -> one-to-one deduplicated recovery opportunities
-
-4. Build recovery cases
-  -> data/processed/recovery_cases.csv
-
-5. Build training rows
-  -> data/processed/training_data.csv
-
-6. Train the case-level V3 model
-  -> models/recovery_probability_model_v3.joblib
-  -> models/recovery_model_v3_report.json
-
-7. Score recoverability and action economics
-  -> data/processed/erv_scores.csv
-
-8. Apply policy and deterministic guardrails
-  -> data/processed/decisions.csv
-
-9. Execute, verify, and audit bounded recovery
-  -> data/processed/agent_results.csv
-  -> data/processed/execution_results.csv
-
-10. Compare with the one-retry baseline
-   -> baseline_results.csv and evaluation reports
+   R->>W: Signed payment event
+   W->>W: Verify signature and event ID
+   W->>A: Normalize payment.failed or payment_link.paid
+   A->>A: Score, apply policy, enforce guardrails
+   A->>A: Create recovery_ready or recovered workflow
+   V-->>A: Captured or paid confirmation
+   A->>A: Persist audit and verified outcome
 ```
+
+The batch evaluation path uses the same decision logic on an isolated unseen
+population and compares the agent with a one-retry baseline.
 
 The held-out submission path uses separate unseen inputs:
 
