@@ -3,7 +3,7 @@
 **Razorpay Buildathon Track 03 — AI Revenue Recovery**
 
 RecoverAI recovered **51.93% of failed payments** versus **35.84% for a one-retry baseline** — a
-**+15.82 percentage-point improvement** — on 3,262 held-out unseen cases, recovering
+**+16.09 percentage-point improvement** — on 3,262 held-out unseen cases, recovering
 **₹44,315,137 simulated** versus ₹30,996,494 for the baseline, a difference of **₹13,318,643**.
 
 > These are deterministic simulated benchmark outcomes on an isolated unseen population.
@@ -46,7 +46,7 @@ revenue-risk event
 |---|---:|---:|---:|
 | RecoverAI | 51.93% | 1,694 | ₹44,315,137 |
 | One-retry baseline | 35.84% | 1,169 | ₹30,996,494 |
-| Difference | **+15.82 pp** | **+525** | **+₹13,318,643** |
+| Difference | **+16.09 pp** | **+525** | **+₹13,318,643** |
 
 RecoverAI also recorded 4,092 automated attempts, 1,480 safe escalations, and 88 stopped cases.
 Every transition has an audit event.
@@ -248,6 +248,6 @@ A production deployment would retrain the action recommender on verified merchan
 ## Project Status
 
 Working Track 03 prototype. Reproducible unseen benchmark. Test Mode Razorpay webhook receiver.
-Policy-controlled agent. 82 passing tests. 0 compile errors.
+Policy-controlled agent. 87 passing tests. 0 compile errors.
 
 Does not claim simulated benchmark money is real revenue or that Test Mode is production processing.

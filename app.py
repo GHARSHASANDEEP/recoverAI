@@ -928,7 +928,7 @@ st.divider()
 st.markdown(
     "<div style='text-align:center;color:#888;font-size:0.85rem'>"
     "RecoverAI · Razorpay Buildathon Track 03 · AI Revenue Recovery · "
-    "82 passing tests · Held-out unseen benchmark · "
+    "87 passing tests · Held-out unseen benchmark · "
     "ML-assisted recovery with deterministic guardrails · "
     "Razorpay Test Mode webhook verified"
     "</div>",
