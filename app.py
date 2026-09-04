@@ -753,6 +753,23 @@ if submitted:
                 policy_initial_action,
             )
 
+            model_candidates = scores[
+                scores["action"].isin(permitted_actions)
+            ].sort_values(
+                ["erv", "recovery_probability"],
+                ascending=[False, False],
+            )
+            ai_recommendation = (
+                str(model_candidates.iloc[0]["action"])
+                if not model_candidates.empty
+                else "stop"
+            )
+            ai_recommendation_row = (
+                model_candidates.iloc[0]
+                if not model_candidates.empty
+                else selected
+            )
+
             decision = {
                 "final_action": policy_initial_action if guardrail["allowed"] else "stop",
                 "decision_reason": guardrail["reason"] if not guardrail["allowed"] else (
@@ -767,6 +784,10 @@ if submitted:
                 "policy_initial_action": policy_initial_action,
                 "permitted_actions": permitted_actions,
                 "recovery_sequence": sequence,
+                "ai_recommendation": ai_recommendation,
+                "ai_recommendation_erv": float(
+                    ai_recommendation_row.get("erv", 0.0)
+                ),
             }
 
             st.success(
@@ -863,6 +884,33 @@ if submitted:
                 f"**Decision reason:** "
                 f"{decision.get('decision_reason', '')}"
             )
+
+            st.subheader("Decision factors")
+            factors = pd.DataFrame(
+                [
+                    {
+                        "Factor": "AI recommendation",
+                        "Result": ai_recommendation.upper(),
+                        "Meaning": "Highest model-ranked permitted economic value",
+                    },
+                    {
+                        "Factor": "Policy first stage",
+                        "Result": policy_initial_action.upper(),
+                        "Meaning": "Failure-aware sequence controls the next safe stage",
+                    },
+                    {
+                        "Factor": "Guardrail authority",
+                        "Result": "ALLOWED" if guardrail["allowed"] else "BLOCKED",
+                        "Meaning": guardrail["reason"],
+                    },
+                    {
+                        "Factor": "Final authorized action",
+                        "Result": decision["final_action"].upper(),
+                        "Meaning": "The action the bounded agent may execute",
+                    },
+                ]
+            )
+            st.dataframe(factors, width="stretch", hide_index=True)
 
             delivery_channel = choose_recovery_channel(judge_case, action)
             message_preview = recovery_message(
