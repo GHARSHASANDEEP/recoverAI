@@ -248,6 +248,64 @@ def get_unique_options(column, fallback):
     return sorted(values) if values else fallback
 
 
+def recovery_priority(case):
+    """Return a transparent 0-100 urgency/value score for one case."""
+
+    amount_score = min(float(case.get("recovery_amount", 0.0)) / 100000.0, 1.0)
+    history_total = max(float(case.get("total_payment_attempts", 1)), 1.0)
+    success_rate = float(case.get("successful_payment_count", 0)) / history_total
+    failure_score = {
+        "temporary_bank_failure": 0.90,
+        "timeout": 0.85,
+        "insufficient_funds": 0.65,
+        "authentication_failed": 0.55,
+        "expired_instrument": 0.35,
+        "limit_exceeded": 0.30,
+        "unknown_failure": 0.25,
+        "blocked_instrument": 0.15,
+        "risk_decline": 0.10,
+    }.get(case.get("failure_category"), 0.25)
+    segment_score = {
+        "high_value": 1.0,
+        "regular": 0.65,
+        "new": 0.35,
+    }.get(case.get("customer_segment"), 0.50)
+    attempt_score = max(0.2, 1.0 - (int(case.get("attempt_number", 1)) - 1) * 0.2)
+
+    score = 100 * (
+        amount_score * 0.35
+        + failure_score * 0.25
+        + segment_score * 0.15
+        + success_rate * 0.15
+        + attempt_score * 0.10
+    )
+    return round(max(0.0, min(100.0, score)), 1)
+
+
+def recovery_message(case, action, channel):
+    """Create a reviewable message preview; sending remains provider-gated."""
+
+    amount = format_inr(case.get("recovery_amount", 0.0))
+    if action == "reminder":
+        message = (
+            f"We noticed a payment of {amount} could not be completed. "
+            "Please update your payment details or try again when convenient."
+        )
+    elif action == "retry":
+        message = (
+            f"We are retrying your {amount} payment through the approved "
+            "recovery flow. We will confirm the result shortly."
+        )
+    else:
+        message = "This case has been routed to a specialist for review."
+
+    return {
+        "channel": channel,
+        "message": message,
+        "status": "preview_only",
+    }
+
+
 # Ensure optional columns exist so the UI remains robust.
 for optional_column, default_value in {
     "confidence_score": None,
@@ -728,10 +786,34 @@ if submitted:
                     f"⚠ Guardrails: {guardrail_status.upper()}"
                 )
 
+            priority = recovery_priority(judge_case)
+            st.subheader("Recovery priority")
+            priority_col1, priority_col2 = st.columns(2)
+            with priority_col1:
+                st.metric("Priority score", f"{priority:.1f} / 100")
+            with priority_col2:
+                st.metric(
+                    "Priority band",
+                    "HIGH" if priority >= 65 else "MEDIUM" if priority >= 40 else "LOW",
+                )
+
             st.info(
                 f"**Decision reason:** "
                 f"{decision.get('decision_reason', '')}"
             )
+
+            delivery_channel = choose_recovery_channel(judge_case, action)
+            message_preview = recovery_message(
+                judge_case,
+                action,
+                delivery_channel,
+            )
+            st.subheader("Customer recovery message")
+            st.caption(
+                f"Preview only | channel: {message_preview['channel']} | "
+                "no message is sent by Judge Mode."
+            )
+            st.info(message_preview["message"])
 
             st.subheader("Action Comparison")
 
