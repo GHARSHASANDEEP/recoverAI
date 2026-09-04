@@ -1,0 +1,61 @@
+{
+  "model_version": "v3_case_level",
+  "target_column": "recovered",
+  "rows": 3312,
+  "positive_rate": 0.7874396135265701,
+  "feature_columns": [
+    "failure_category",
+    "customer_segment",
+    "amount_bucket",
+    "attempt_number",
+    "customer_lifetime_value",
+    "successful_payment_count",
+    "failed_payment_count",
+    "total_payment_attempts",
+    "historical_failure_rate",
+    "communication_opt_in"
+  ],
+  "excluded_columns": [
+    "action",
+    "case_id",
+    "recovered",
+    "recovery_amount"
+  ],
+  "candidates": [
+    {
+      "model": "logistic_regression",
+      "accuracy": 0.6319758672699849,
+      "roc_auc": 0.7305575935436537,
+      "pr_auc": 0.9048820709986591,
+      "brier_score": 0.20613198806822094
+    },
+    {
+      "model": "random_forest",
+      "accuracy": 0.6515837104072398,
+      "roc_auc": 0.7361213010516019,
+      "pr_auc": 0.9085469242269654,
+      "brier_score": 0.19675619070613595
+    },
+    {
+      "model": "hist_gradient_boosting",
+      "accuracy": 0.8099547511312217,
+      "roc_auc": 0.7318007662835249,
+      "pr_auc": 0.9022614843267361,
+      "brier_score": 0.1418578010067927
+    }
+  ],
+  "selection_criterion": {
+    "primary": "brier_score",
+    "secondary": "roc_auc",
+    "tertiary": "pr_auc",
+    "accuracy_role": "diagnostic_only"
+  },
+  "selected_model": {
+    "model": "hist_gradient_boosting",
+    "accuracy": 0.8099547511312217,
+    "roc_auc": 0.7318007662835249,
+    "pr_auc": 0.9022614843267361,
+    "brier_score": 0.1418578010067927
+  },
+  "note": "The model predicts case recoverability. It does not select actions. Recovery policy, guardrails and state machine determine permitted actions."
+}

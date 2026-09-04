@@ -7,7 +7,24 @@ from src.engine.deduplicator import (
 )
 
 
-OUTPUT_PATH = "data/processed/recovery_cases.csv"
+OUTPUT_PATH = (
+    "data/processed/recovery_cases.csv"
+)
+
+
+def set_output_path(
+    path: str,
+) -> None:
+    """
+    Change the recovery-case output path for the
+    current Python process.
+
+    Default behavior remains unchanged.
+    """
+
+    global OUTPUT_PATH
+
+    OUTPUT_PATH = path
 
 
 def build_recovery_cases(

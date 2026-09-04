@@ -6,6 +6,23 @@ import pandas as pd
 DATA_DIRECTORY = Path("data/raw")
 
 
+def set_data_directory(
+    directory: str | Path,
+) -> None:
+    """
+    Change the input data directory for the current
+    Python process.
+
+    The default remains data/raw, so the existing
+    RecoverAI pipeline is unchanged unless explicitly
+    overridden.
+    """
+
+    global DATA_DIRECTORY
+
+    DATA_DIRECTORY = Path(directory)
+
+
 def load_data() -> tuple[
     pd.DataFrame,
     pd.DataFrame,

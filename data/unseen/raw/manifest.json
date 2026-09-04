@@ -1,0 +1,12 @@
+{
+  "dataset_type": "unseen_evaluation",
+  "seed": 20260905,
+  "model_retrained": false,
+  "source_generator": "src.data.generator",
+  "customers": 2000,
+  "payments": 7000,
+  "subscriptions": 2000,
+  "checkouts": 3500,
+  "invoices": 2000,
+  "generated_at": "2026-08-26T20:09:45.987567"
+}

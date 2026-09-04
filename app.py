@@ -5,13 +5,14 @@ import pandas as pd
 import streamlit as st
 
 from src.data.outcome_rules import get_amount_bucket
-from src.engine.decision_engine import apply_decision
+from src.engine.decision_engine import apply_decision, evaluate_guardrails
 from src.engine.erv import score_case_actions
+from src.engine.recovery_policy import get_initial_action, get_permitted_actions, get_recovery_sequence
 
 
-# --------------------------------------------------
+# =========================================================
 # Configuration
-# --------------------------------------------------
+# =========================================================
 
 st.set_page_config(
     page_title="RecoverAI",
@@ -19,103 +20,154 @@ st.set_page_config(
     layout="wide",
 )
 
-DATA_DIR = "data/processed"
+UNSEEN_DIR = "data/unseen/processed"
+REFERENCE_DIR = "data/processed"
 
 
-# --------------------------------------------------
-# Load data
-# --------------------------------------------------
+# =========================================================
+# Data loading
+# =========================================================
 
 @st.cache_data
 def load_data():
+    """
+    Load the held-out/unseen evaluation population.
 
-    decisions = pd.read_csv(
-        os.path.join(
-            DATA_DIR,
-            "decisions.csv",
-        )
-    )
+    The dashboard deliberately prefers data/unseen/processed so
+    the main metrics represent the latest unseen-agent run.
+    Reference evaluation data is loaded separately only when
+    available, and is never mixed into the unseen KPIs.
+    """
+    unseen_decisions_path = os.path.join(UNSEEN_DIR, "decisions.csv")
+    unseen_agent_path = os.path.join(UNSEEN_DIR, "agent_results.csv")
+    unseen_cases_path = os.path.join(UNSEEN_DIR, "recovery_cases.csv")
 
-    agent = pd.read_csv(
-        os.path.join(
-            DATA_DIR,
-            "agent_results.csv",
+    if not (
+        os.path.exists(unseen_decisions_path)
+        and os.path.exists(unseen_agent_path)
+    ):
+        raise FileNotFoundError(
+            "Unseen evaluation files were not found. "
+            "Expected data/unseen/processed/decisions.csv and "
+            "data/unseen/processed/agent_results.csv."
         )
-    )
 
-    cases = pd.read_csv(
-        os.path.join(
-            DATA_DIR,
-            "recovery_cases.csv",
-        )
-    )
-
-    evaluation = pd.read_csv(
-        os.path.join(
-            DATA_DIR,
-            "evaluation_report.csv",
-        )
-    )
+    decisions = pd.read_csv(unseen_decisions_path)
+    agent = pd.read_csv(unseen_agent_path)
 
     data = decisions.merge(
         agent,
         on="case_id",
         how="left",
+        suffixes=("", "_agent"),
     )
 
-    data = data.merge(
-        cases[
-            [
-                "case_id",
-                "surfaces",
-                "event_types",
-                "failure_categories",
-                "dedup_status",
-                "dedup_score",
-            ]
-        ],
-        on="case_id",
-        how="left",
-        suffixes=("", "_case"),
+    if os.path.exists(unseen_cases_path):
+        cases = pd.read_csv(unseen_cases_path)
+
+        case_columns = [
+            "case_id",
+            "surfaces",
+            "event_types",
+            "failure_categories",
+            "dedup_status",
+            "dedup_score",
+        ]
+
+        available = [
+            column
+            for column in case_columns
+            if column in cases.columns
+        ]
+
+        if "case_id" in available:
+            data = data.merge(
+                cases[available],
+                on="case_id",
+                how="left",
+                suffixes=("", "_case"),
+            )
+
+    reference_evaluation = None
+    reference_path = os.path.join(
+        REFERENCE_DIR,
+        "evaluation_report.csv",
     )
 
-    return (
-        data,
-        evaluation,
-    )
+    if os.path.exists(reference_path):
+        reference_evaluation = pd.read_csv(reference_path)
+
+    return data, reference_evaluation
 
 
-data, evaluation = load_data()
+data, reference_evaluation = load_data()
 
 
-# --------------------------------------------------
+# =========================================================
 # Helper functions
-# --------------------------------------------------
-
-def metric_value(
-    metric,
-    column="recoverAI",
-):
-    row = evaluation[
-        evaluation["metric"] == metric
-    ]
-
-    if row.empty:
-        return 0.0
-
-    return float(
-        row.iloc[0][column]
-    )
-
+# =========================================================
 
 def format_inr(value):
-    return f"₹{value:,.2f}"
+    try:
+        return f"₹{float(value):,.2f}"
+    except (TypeError, ValueError):
+        return "₹0.00"
+
+
+def failure_explanation(failure_category):
+    explanations = {
+        "insufficient_funds": (
+            "The payment was declined because the available balance or funds were insufficient at the time of authorization.",
+            "Reminder first → reassess the payment state → retry only if the policy allows the next recovery stage → escalate after the bounded recovery path is exhausted.",
+        ),
+        "authentication_failed": (
+            "The payment could not complete because the required authentication step was not successfully completed.",
+            "Ask the customer to complete the required authentication step → reassess → retry when permitted → escalate if unresolved.",
+        ),
+        "temporary_bank_failure": (
+            "The issuing bank or payment rail appears to have experienced a temporary failure rather than a permanent decline.",
+            "Retry first → verify the outcome → reassess after failure → use the next permitted recovery stage or escalate.",
+        ),
+        "timeout": (
+            "The payment attempt did not receive a timely response from the payment path.",
+            "Retry first → verify the result → reassess → escalate if the bounded retry path is exhausted.",
+        ),
+        "limit_exceeded": (
+            "The transaction appears to have exceeded an applicable payment or instrument limit.",
+            "Notify the customer first → reassess → retry only when the policy permits it → escalate when the safe path is exhausted.",
+        ),
+        "expired_instrument": (
+            "The payment instrument appears to be expired or no longer valid for authorization.",
+            "Prompt for corrective customer action → reassess the case → escalate if the instrument cannot be recovered safely.",
+        ),
+        "risk_decline": (
+            "The transaction was declined by a risk-control decision; blind retries are unlikely to resolve the underlying issue.",
+            "Do not retry automatically → escalate for appropriate review.",
+        ),
+        "blocked_instrument": (
+            "The payment instrument is blocked and should not be retried automatically.",
+            "Do not retry → escalate or request a valid alternative path.",
+        ),
+        "unknown_failure": (
+            "The gateway supplied an unclassified or ambiguous failure signal, so RecoverAI uses the safest permitted recovery path.",
+            "Start with the conservative recovery stage → execute → verify the outcome → reassess before any next action.",
+        ),
+    }
+    return explanations.get(
+        failure_category,
+        (
+            "The payment failure could not be mapped to a known failure diagnosis.",
+            "Use the safest bounded recovery path and escalate when it is exhausted.",
+        ),
+    )
 
 
 def parse_audit_trail(value):
-
     if pd.isna(value):
         return []
+
+    if isinstance(value, list):
+        return value
 
     try:
         return json.loads(value)
@@ -123,50 +175,251 @@ def parse_audit_trail(value):
         return []
 
 
-# --------------------------------------------------
+def metric_value(metric, column="recoverAI"):
+    """
+    Read an optional metric from the reference evaluation report.
+    This is intentionally not used for the unseen KPI cards.
+    """
+    if reference_evaluation is None:
+        return 0.0
+
+    row = reference_evaluation[
+        reference_evaluation["metric"] == metric
+    ]
+
+    if row.empty or column not in row.columns:
+        return 0.0
+
+    try:
+        return float(row.iloc[0][column])
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def safe_number(row, column, default=0.0):
+    value = row.get(column, default)
+
+    if pd.isna(value):
+        return default
+
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def get_unique_options(column, fallback):
+    if column not in data.columns:
+        return fallback
+
+    values = (
+        data[column]
+        .dropna()
+        .astype(str)
+        .unique()
+        .tolist()
+    )
+
+    return sorted(values) if values else fallback
+
+
+# Ensure optional columns exist so the UI remains robust.
+for optional_column, default_value in {
+    "confidence_score": None,
+    "confidence_level": "not_evaluated",
+    "audit_event_count": 0,
+    "attempts": 0,
+    "total_recovered": 0.0,
+    "audit_trail": "[]",
+}.items():
+    if optional_column not in data.columns:
+        data[optional_column] = default_value
+
+data["confidence_level"] = (
+    data["confidence_level"]
+    .fillna("not_evaluated")
+    .astype(str)
+)
+
+data["attempts"] = pd.to_numeric(
+    data["attempts"],
+    errors="coerce",
+).fillna(0)
+
+data["total_recovered"] = pd.to_numeric(
+    data["total_recovered"],
+    errors="coerce",
+).fillna(0.0)
+
+data["audit_event_count"] = pd.to_numeric(
+    data["audit_event_count"],
+    errors="coerce",
+).fillna(0)
+
+
+# =========================================================
 # Header
-# --------------------------------------------------
+# =========================================================
 
 st.title("RecoverAI")
-st.subheader(
-    "Intelligent Payment Recovery Platform"
-)
+st.subheader("Intelligent Payment Recovery Platform")
 
 st.caption(
     "Diagnose → Predict → Optimize → Execute → Verify → Recover"
 )
 
+st.success(
+    "🧪 Unseen Evaluation Mode — dashboard metrics below are "
+    "generated from the held-out recovery population, not the "
+    "development sample."
+)
 
-# --------------------------------------------------
+
+# =========================================================
+# Unseen evaluation summary
+# =========================================================
+
+st.divider()
+st.header("📊 Unseen Evaluation")
+
+total_cases = len(data)
+recovered_cases = int(
+    (data["final_status"] == "recovered").sum()
+)
+escalated_cases = int(
+    (data["final_status"] == "escalated").sum()
+)
+stopped_cases = int(
+    (data["final_status"] == "stopped").sum()
+)
+
+recovery_rate = (
+    recovered_cases / total_cases
+    if total_cases
+    else 0.0
+)
+
+money_recovered = float(
+    data["total_recovered"].sum()
+)
+
+total_attempts = int(
+    data["attempts"].sum()
+)
+
+multi_attempt_cases = int(
+    (data["attempts"] > 1).sum()
+)
+
+audit_events = int(
+    data["audit_event_count"].sum()
+)
+
+money_per_attempt = (
+    money_recovered / total_attempts
+    if total_attempts
+    else 0.0
+)
+
+average_recovered_case = (
+    money_recovered / recovered_cases
+    if recovered_cases
+    else 0.0
+)
+
+col1, col2, col3, col4 = st.columns(4)
+
+with col1:
+    st.metric(
+        "Cases Evaluated",
+        f"{total_cases:,}",
+    )
+
+with col2:
+    st.metric(
+        "Recovery Rate",
+        f"{recovery_rate:.2%}",
+    )
+
+with col3:
+    st.metric(
+        "Verified Recovery",
+        format_inr(money_recovered),
+    )
+
+with col4:
+    st.metric(
+        "Recovered Cases",
+        f"{recovered_cases:,}",
+    )
+
+col1, col2, col3, col4 = st.columns(4)
+
+with col1:
+    st.metric(
+        "Recovery Attempts",
+        f"{total_attempts:,}",
+    )
+
+with col2:
+    st.metric(
+        "Multi-attempt Cases",
+        f"{multi_attempt_cases:,}",
+    )
+
+with col3:
+    st.metric(
+        "Audit Events",
+        f"{audit_events:,}",
+    )
+
+with col4:
+    st.metric(
+        "Money / Attempt",
+        format_inr(money_per_attempt),
+    )
+
+st.caption(
+    f"Average verified recovery among recovered cases: "
+    f"{format_inr(average_recovered_case)}"
+)
+
+
+# =========================================================
 # Judge Mode
-# --------------------------------------------------
+# =========================================================
 
 st.divider()
 st.header("🧪 Judge Mode")
+
 st.caption(
-    "Create a new recovery case and run it through the same "
-    "ML → ERV → guardrail decision pipeline used by RecoverAI. "
-    "This does not modify the stored batch results."
+    "Create a case and see the full RecoverAI reasoning: why the payment "
+    "failed, what recovery strategy is permitted, the ML recoverability "
+    "signal, and which bounded action is executed next. Economics informs "
+    "the decision but cannot override the failure-aware policy."
+)
+
+failure_options = get_unique_options(
+    "failure_category",
+    [
+        "authentication_failed",
+        "blocked_instrument",
+        "expired_instrument",
+        "insufficient_funds",
+        "limit_exceeded",
+        "risk_decline",
+        "temporary_bank_failure",
+        "timeout",
+        "unknown_failure",
+    ],
+)
+
+segment_options = get_unique_options(
+    "customer_segment",
+    ["high_value", "regular"],
 )
 
 with st.form("judge_case_form"):
-
-    failure_options = sorted(
-        data["failure_category"]
-        .dropna()
-        .astype(str)
-        .unique()
-        .tolist()
-    )
-
-    segment_options = sorted(
-        data["customer_segment"]
-        .dropna()
-        .astype(str)
-        .unique()
-        .tolist()
-    )
-
     col1, col2, col3 = st.columns(3)
 
     with col1:
@@ -236,8 +489,8 @@ with st.form("judge_case_form"):
         type="primary",
     )
 
-if submitted:
 
+if submitted:
     validation_errors = []
 
     if judge_amount <= 0:
@@ -270,28 +523,20 @@ if submitted:
         )
 
     if validation_errors:
-
         st.error("⚠️ Invalid recovery case")
 
         for error in validation_errors:
             st.write(f"• {error}")
 
     else:
-
         judge_case = {
             "case_id": "JUDGE_CASE",
             "customer_id": "JUDGE_CUSTOMER",
             "failure_category": judge_failure,
             "customer_segment": judge_segment,
-            "communication_opt_in": bool(
-                judge_opt_in
-            ),
-            "recovery_amount": float(
-                judge_amount
-            ),
-            "attempt_number": int(
-                judge_attempt
-            ),
+            "communication_opt_in": bool(judge_opt_in),
+            "recovery_amount": float(judge_amount),
+            "attempt_number": int(judge_attempt),
             "customer_lifetime_value": float(
                 judge_lifetime_value
             ),
@@ -310,23 +555,64 @@ if submitted:
         }
 
         try:
+            scores = score_case_actions(judge_case)
 
-            scores = score_case_actions(
-                judge_case
+            policy_initial_action = get_initial_action(judge_failure)
+            permitted_actions = get_permitted_actions(judge_failure)
+            sequence = get_recovery_sequence(judge_failure)
+
+            selected_rows = scores[
+                scores["action"] == policy_initial_action
+            ].copy()
+
+            if selected_rows.empty:
+                raise ValueError(
+                    f"No model score was produced for policy action: {policy_initial_action}"
+                )
+
+            selected = selected_rows.iloc[0]
+            guardrail = evaluate_guardrails(
+                {**judge_case, "erv": float(selected.get("erv", 0.0))},
+                policy_initial_action,
             )
 
-            decision = apply_decision(
-                judge_case,
-                scores,
-            )
+            decision = {
+                "final_action": policy_initial_action if guardrail["allowed"] else "stop",
+                "decision_reason": guardrail["reason"] if not guardrail["allowed"] else (
+                    f"Policy selected {policy_initial_action} as the first safe recovery stage for {judge_failure}."
+                ),
+                "guardrail_status": "passed" if guardrail["allowed"] else "blocked",
+                "recovery_probability": float(selected["recovery_probability"]),
+                "expected_recovery": float(selected["expected_recovery"]),
+                "action_cost": float(selected["action_cost"]),
+                "erv": float(selected.get("erv", 0.0)),
+                "candidate_actions": scores.to_dict(orient="records"),
+                "policy_initial_action": policy_initial_action,
+                "permitted_actions": permitted_actions,
+                "recovery_sequence": sequence,
+            }
 
             st.success(
-                "✓ RecoverAI completed the decision."
+                "✓ RecoverAI diagnosed the failure and selected a bounded recovery strategy."
             )
 
-            st.subheader(
-                "RecoverAI Decision"
-            )
+            why_failed, strategy = failure_explanation(judge_failure)
+
+            st.subheader("Why did the payment fail?")
+            st.info(why_failed)
+
+            st.subheader("Recovery strategy")
+            st.success(strategy)
+
+            strategy_col1, strategy_col2, strategy_col3 = st.columns(3)
+            with strategy_col1:
+                st.metric("Policy Stage", policy_initial_action.upper())
+            with strategy_col2:
+                st.metric("Allowed Actions", str(len(permitted_actions)))
+            with strategy_col3:
+                st.metric("Recovery Path", " → ".join(sequence).upper())
+
+            st.subheader("RecoverAI Decision")
 
             action = decision.get(
                 "final_action",
@@ -362,7 +648,7 @@ if submitted:
 
             with col4:
                 st.metric(
-                    "ERV",
+                    "Economic Signal",
                     format_inr(
                         decision.get(
                             "erv",
@@ -390,9 +676,7 @@ if submitted:
                 f"{decision.get('decision_reason', '')}"
             )
 
-            st.subheader(
-                "Action Comparison"
-            )
+            st.subheader("Action Comparison")
 
             candidate_df = pd.DataFrame(
                 decision.get(
@@ -402,76 +686,72 @@ if submitted:
             )
 
             if not candidate_df.empty:
+                candidate_display = candidate_df.copy()
 
-                candidate_display = (
-                    candidate_df[
-                        [
-                            "action",
-                            "recovery_probability",
-                            "expected_recovery",
-                            "action_cost",
-                            "erv",
-                            "guardrail_allowed",
-                            "guardrail_reason",
-                        ]
-                    ]
-                    .copy()
-                )
+                preferred_columns = [
+                    "action",
+                    "recovery_probability",
+                    "expected_recovery",
+                    "action_cost",
+                    "erv",
+                    "guardrail_allowed",
+                    "guardrail_reason",
+                ]
 
-                candidate_display[
-                    "recovery_probability"
-                ] = candidate_display[
-                    "recovery_probability"
-                ].map(
-                    lambda x: f"{x:.1%}"
-                )
+                available_columns = [
+                    column
+                    for column in preferred_columns
+                    if column in candidate_display.columns
+                ]
 
-                candidate_display[
-                    "expected_recovery"
-                ] = candidate_display[
-                    "expected_recovery"
-                ].map(
-                    format_inr
-                )
+                candidate_display = candidate_display[
+                    available_columns
+                ]
 
-                candidate_display[
-                    "action_cost"
-                ] = candidate_display[
-                    "action_cost"
-                ].map(
-                    format_inr
-                )
-
-                candidate_display[
-                    "erv"
-                ] = candidate_display[
-                    "erv"
-                ].map(
-                    format_inr
-                )
-
-                candidate_display[
-                    "guardrail_allowed"
-                ] = candidate_display[
-                    "guardrail_allowed"
-                ].map(
-                    lambda x: "✓ Allowed"
-                    if x
-                    else "✗ Blocked"
-                )
-
-                candidate_display = (
-                    candidate_display.rename(
-                        columns={
-                            "action": "Action",
-                            "recovery_probability": "Probability",
-                            "expected_recovery": "Expected Recovery",
-                            "action_cost": "Cost",
-                            "erv": "ERV",
-                            "guardrail_allowed": "Guardrail",
-                            "guardrail_reason": "Guardrail Reason",
-                        }
+                if "recovery_probability" in candidate_display:
+                    candidate_display[
+                        "recovery_probability"
+                    ] = candidate_display[
+                        "recovery_probability"
+                    ].map(
+                        lambda x: f"{x:.1%}"
                     )
+
+                for money_column in [
+                    "expected_recovery",
+                    "action_cost",
+                    "erv",
+                ]:
+                    if money_column in candidate_display:
+                        candidate_display[
+                            money_column
+                        ] = candidate_display[
+                            money_column
+                        ].map(format_inr)
+
+                if "guardrail_allowed" in candidate_display:
+                    candidate_display[
+                        "guardrail_allowed"
+                    ] = candidate_display[
+                        "guardrail_allowed"
+                    ].map(
+                        lambda x: (
+                            "✓ Allowed"
+                            if x
+                            else "✗ Blocked"
+                        )
+                    )
+
+                candidate_display = candidate_display.rename(
+                    columns={
+                        "action": "Action",
+                        "recovery_probability": "Probability",
+                        "expected_recovery": "Expected Recovery",
+                        "action_cost": "Cost",
+                        "erv": "Economic Signal",
+                        "guardrail_allowed": "Guardrail",
+                        "guardrail_reason": "Guardrail Reason",
+                    }
                 )
 
                 st.dataframe(
@@ -481,7 +761,6 @@ if submitted:
                 )
 
         except Exception as exc:
-
             st.error(
                 "⚠️ RecoverAI could not process this case safely."
             )
@@ -497,22 +776,20 @@ if submitted:
             )
 
 
-# --------------------------------------------------
-# Stress tests
-# --------------------------------------------------
+# =========================================================
+# Safety stress tests
+# =========================================================
 
 with st.expander("🛡️ Run predefined safety stress tests"):
-
     st.caption(
         "These cases demonstrate deterministic guardrails and "
-        "input safety. They are evaluated using the same decision engine."
+        "input safety using the same decision engine."
     )
 
     if st.button(
         "Run 4 stress tests",
         key="stress_tests",
     ):
-
         stress_cases = [
             {
                 "name": "Communication opt-out",
@@ -528,7 +805,9 @@ with st.expander("🛡️ Run predefined safety stress tests"):
                     "successful_payment_count": 8,
                     "failed_payment_count": 2,
                     "total_payment_attempts": 10,
-                    "amount_bucket": get_amount_bucket(20000.0),
+                    "amount_bucket": get_amount_bucket(
+                        20000.0
+                    ),
                 },
                 "focus": "Reminder must be blocked.",
             },
@@ -546,7 +825,9 @@ with st.expander("🛡️ Run predefined safety stress tests"):
                     "successful_payment_count": 8,
                     "failed_payment_count": 2,
                     "total_payment_attempts": 10,
-                    "amount_bucket": get_amount_bucket(20000.0),
+                    "amount_bucket": get_amount_bucket(
+                        20000.0
+                    ),
                 },
                 "focus": "Retry must be blocked.",
             },
@@ -564,18 +845,38 @@ with st.expander("🛡️ Run predefined safety stress tests"):
                     "successful_payment_count": 8,
                     "failed_payment_count": 2,
                     "total_payment_attempts": 10,
-                    "amount_bucket": get_amount_bucket(50001.0),
+                    "amount_bucket": get_amount_bucket(
+                        50001.0
+                    ),
                 },
                 "focus": "Demonstrates the high-value policy path.",
+            },
+            {
+                "name": "Blocked instrument",
+                "case": {
+                    "case_id": "STRESS_BLOCKED",
+                    "customer_id": "STRESS_CUSTOMER",
+                    "failure_category": "blocked_instrument",
+                    "customer_segment": segment_options[0],
+                    "communication_opt_in": True,
+                    "recovery_amount": 20000.0,
+                    "attempt_number": 1,
+                    "customer_lifetime_value": 50000.0,
+                    "successful_payment_count": 8,
+                    "failed_payment_count": 2,
+                    "total_payment_attempts": 10,
+                    "amount_bucket": get_amount_bucket(
+                        20000.0
+                    ),
+                },
+                "focus": "Only escalation is permitted.",
             },
         ]
 
         results = []
 
         for item in stress_cases:
-
             try:
-
                 scores = score_case_actions(
                     item["case"]
                 )
@@ -592,7 +893,7 @@ with st.expander("🛡️ Run predefined safety stress tests"):
                             "candidate_actions",
                             [],
                         )
-                        if row["action"] == "retry"
+                        if row.get("action") == "retry"
                     ),
                     None,
                 )
@@ -604,7 +905,7 @@ with st.expander("🛡️ Run predefined safety stress tests"):
                             "candidate_actions",
                             [],
                         )
-                        if row["action"] == "reminder"
+                        if row.get("action") == "reminder"
                     ),
                     None,
                 )
@@ -613,9 +914,10 @@ with st.expander("🛡️ Run predefined safety stress tests"):
                     result = (
                         "PASS"
                         if reminder_row
-                        and not reminder_row[
-                            "guardrail_allowed"
-                        ]
+                        and not reminder_row.get(
+                            "guardrail_allowed",
+                            True,
+                        )
                         else "CHECK"
                     )
 
@@ -623,9 +925,28 @@ with st.expander("🛡️ Run predefined safety stress tests"):
                     result = (
                         "PASS"
                         if retry_row
-                        and not retry_row[
-                            "guardrail_allowed"
-                        ]
+                        and not retry_row.get(
+                            "guardrail_allowed",
+                            True,
+                        )
+                        else "CHECK"
+                    )
+
+                elif item["name"] == "Blocked instrument":
+                    permitted = [
+                        row
+                        for row in decision.get(
+                            "candidate_actions",
+                            [],
+                        )
+                        if row.get("guardrail_allowed")
+                    ]
+
+                    result = (
+                        "PASS"
+                        if len(permitted) == 1
+                        and permitted[0].get("action")
+                        == "escalate"
                         else "CHECK"
                     )
 
@@ -644,7 +965,6 @@ with st.expander("🛡️ Run predefined safety stress tests"):
                 )
 
             except Exception as exc:
-
                 results.append(
                     {
                         "Test": item["name"],
@@ -661,46 +981,28 @@ with st.expander("🛡️ Run predefined safety stress tests"):
         )
 
     st.caption(
-        "Malformed-input handling is demonstrated through the "
+        "Malformed-input handling is demonstrated through "
         "Judge Mode validation above."
     )
 
 
+# =========================================================
+# Economic view
+# =========================================================
+
 st.divider()
+st.header("💰 Recovery Economics")
 
-
-# --------------------------------------------------
-# KPI cards
-# --------------------------------------------------
-
-revenue_at_risk = metric_value(
-    "gross_revenue_at_risk"
-)
-
-recoverAI_money = metric_value(
-    "money_recovered"
-)
-
-baseline_money = metric_value(
-    "money_recovered",
-    "baseline",
-)
-
-incremental_money = metric_value(
-    "incremental_money_recovered"
-)
-
-improvement = metric_value(
-    "improvement_percent"
-)
-
-recovery_rate = metric_value(
-    "recovery_rate"
-)
-
-baseline_rate = metric_value(
-    "recovery_rate",
-    "baseline",
+revenue_at_risk = (
+    pd.to_numeric(
+        data.get(
+            "recovery_amount",
+            pd.Series(dtype=float),
+        ),
+        errors="coerce",
+    )
+    .fillna(0)
+    .sum()
 )
 
 col1, col2, col3, col4 = st.columns(4)
@@ -708,58 +1010,49 @@ col1, col2, col3, col4 = st.columns(4)
 with col1:
     st.metric(
         "Revenue at Risk",
-        format_inr(
-            revenue_at_risk
-        ),
+        format_inr(revenue_at_risk),
     )
 
 with col2:
     st.metric(
         "Verified Recovery",
-        format_inr(
-            recoverAI_money
-        ),
+        format_inr(money_recovered),
     )
 
 with col3:
     st.metric(
-        "Incremental Recovery",
-        format_inr(
-            incremental_money
-        ),
+        "Recovery Rate",
+        f"{recovery_rate:.2%}",
     )
 
 with col4:
     st.metric(
-        "Improvement vs Baseline",
-        f"{improvement:.2f}%",
+        "Money / Attempt",
+        format_inr(money_per_attempt),
     )
 
-
-st.divider()
-
-
-# --------------------------------------------------
-# Performance comparison
-# --------------------------------------------------
-
-st.header(
-    "Recovery Performance"
+st.caption(
+    "Economic metrics above are calculated directly from the "
+    "3,262-case unseen-agent output. No development-set result "
+    "is mixed into these values."
 )
 
-comparison = pd.DataFrame(
+
+# =========================================================
+# Performance
+# =========================================================
+
+st.header("Recovery Performance")
+
+performance = pd.DataFrame(
     {
-        "System": [
-            "Blind Retry Baseline",
-            "RecoverAI",
+        "Metric": [
+            "Recovery Rate",
+            "Verified Money Recovered",
         ],
-        "Recovery Rate": [
-            baseline_rate,
+        "RecoverAI": [
             recovery_rate,
-        ],
-        "Money Recovered": [
-            baseline_money,
-            recoverAI_money,
+            money_recovered,
         ],
     }
 )
@@ -767,92 +1060,281 @@ comparison = pd.DataFrame(
 col1, col2 = st.columns(2)
 
 with col1:
-
     st.bar_chart(
-        comparison.set_index(
-            "System"
-        )["Recovery Rate"]
+        pd.DataFrame(
+            {
+                "Recovery Rate": [recovery_rate],
+            },
+            index=["RecoverAI"],
+        )
     )
 
 with col2:
-
     st.bar_chart(
-        comparison.set_index(
-            "System"
-        )["Money Recovered"]
+        pd.DataFrame(
+            {
+                "Verified Recovery": [
+                    money_recovered
+                ],
+            },
+            index=["RecoverAI"],
+        )
     )
 
+
+# =========================================================
+# Agent behavior
+# =========================================================
 
 st.divider()
-
-
-# --------------------------------------------------
-# Agent behavior
-# --------------------------------------------------
-
-st.header(
-    "Agent Behavior"
-)
+st.header("🤖 Agent Behavior")
 
 agent_status = (
-    data[
-        "final_status"
-    ]
+    data["final_status"]
     .value_counts()
     .rename_axis("status")
-    .reset_index(
-        name="cases"
-    )
+    .reset_index(name="cases")
 )
 
 col1, col2 = st.columns(2)
 
 with col1:
-
     st.bar_chart(
-        agent_status.set_index(
-            "status"
+        agent_status.set_index("status")
+    )
+
+with col2:
+    st.metric(
+        "Recovered",
+        f"{recovered_cases:,}",
+    )
+
+    st.metric(
+        "Escalated",
+        f"{escalated_cases:,}",
+    )
+
+    st.metric(
+        "Stopped",
+        f"{stopped_cases:,}",
+    )
+
+
+# =========================================================
+# Confidence-aware behavior
+# =========================================================
+
+st.divider()
+st.header("🎯 Confidence-Aware Decisions")
+
+st.caption(
+    "Confidence is a decision-support signal. Low confidence "
+    "does not override deterministic policy guardrails; it "
+    "helps identify cases where the model should be treated "
+    "more cautiously."
+)
+
+confidence_distribution = (
+    data["confidence_level"]
+    .value_counts()
+    .rename_axis("confidence_level")
+    .reset_index(name="cases")
+)
+
+col1, col2 = st.columns(2)
+
+with col1:
+    st.bar_chart(
+        confidence_distribution.set_index(
+            "confidence_level"
         )
     )
 
 with col2:
-
-    multi_attempt = int(
-        (
-            data["attempts"] > 1
-        ).sum()
+    confidence_summary = (
+        data.groupby("confidence_level")
+        .agg(
+            cases=("case_id", "count"),
+            recovered=(
+                "final_status",
+                lambda s: (
+                    s == "recovered"
+                ).sum(),
+            ),
+            total_recovered=(
+                "total_recovered",
+                "sum",
+            ),
+            average_confidence=(
+                "confidence_score",
+                "mean",
+            ),
+        )
+        .reset_index()
     )
 
-    total_attempts = int(
-        data["attempts"].sum()
+    confidence_summary["recovery_rate"] = (
+        confidence_summary["recovered"]
+        / confidence_summary["cases"]
     )
 
-    st.metric(
-        "Multi-attempt Cases",
-        f"{multi_attempt:,}",
+    display_confidence = confidence_summary.copy()
+
+    display_confidence[
+        "average_confidence"
+    ] = display_confidence[
+        "average_confidence"
+    ].map(
+        lambda x: (
+            "—"
+            if pd.isna(x)
+            else f"{x:.3f}"
+        )
     )
 
-    st.metric(
-        "Total Recovery Attempts",
-        f"{total_attempts:,}",
+    display_confidence[
+        "total_recovered"
+    ] = display_confidence[
+        "total_recovered"
+    ].map(format_inr)
+
+    display_confidence[
+        "recovery_rate"
+    ] = display_confidence[
+        "recovery_rate"
+    ].map(
+        lambda x: f"{x:.2%}"
     )
 
-    st.metric(
-        "Audit Events",
-        f"{int(data['audit_event_count'].sum()):,}",
+    display_confidence = display_confidence.rename(
+        columns={
+            "confidence_level": "Confidence",
+            "cases": "Cases",
+            "recovered": "Recovered",
+            "total_recovered": "Money Recovered",
+            "average_confidence": "Avg Score",
+            "recovery_rate": "Recovery Rate",
+        }
     )
 
+    st.dataframe(
+        display_confidence,
+        use_container_width=True,
+        hide_index=True,
+    )
+
+
+# =========================================================
+# Category performance
+# =========================================================
 
 st.divider()
+st.header("Failure Category Performance")
 
-
-# --------------------------------------------------
-# Recovery cases
-# --------------------------------------------------
-
-st.header(
-    "Recovery Cases"
+category_summary = (
+    data.groupby("failure_category")
+    .agg(
+        cases=("case_id", "count"),
+        recovered=(
+            "final_status",
+            lambda s: (
+                s == "recovered"
+            ).sum(),
+        ),
+        money_recovered=(
+            "total_recovered",
+            "sum",
+        ),
+        attempts=(
+            "attempts",
+            "sum",
+        ),
+    )
+    .reset_index()
 )
+
+category_summary["recovery_rate"] = (
+    category_summary["recovered"]
+    / category_summary["cases"]
+)
+
+category_summary["money_per_attempt"] = (
+    category_summary["money_recovered"]
+    / category_summary["attempts"].replace(
+        0,
+        float("nan"),
+    )
+)
+
+category_display = category_summary.copy()
+
+for column in [
+    "recovery_rate",
+]:
+    category_display[column] = category_display[column].map(
+        lambda x: f"{x:.2%}"
+    )
+
+for column in [
+    "money_recovered",
+    "money_per_attempt",
+]:
+    category_display[column] = category_display[column].map(
+        lambda x: (
+            "—"
+            if pd.isna(x)
+            else format_inr(x)
+        )
+    )
+
+category_display = category_display.rename(
+    columns={
+        "failure_category": "Failure Category",
+        "cases": "Cases",
+        "recovered": "Recovered",
+        "recovery_rate": "Recovery Rate",
+        "money_recovered": "Money Recovered",
+        "attempts": "Attempts",
+        "money_per_attempt": "Money / Attempt",
+    }
+)
+
+st.dataframe(
+    category_display.sort_values(
+        "Recovery Rate",
+        ascending=False,
+    ),
+    use_container_width=True,
+    hide_index=True,
+)
+
+st.subheader("Category × Final Status")
+
+category_status = (
+    data.groupby(
+        [
+            "failure_category",
+            "final_status",
+        ]
+    )
+    .size()
+    .unstack(
+        fill_value=0
+    )
+)
+
+st.dataframe(
+    category_status,
+    use_container_width=True,
+)
+
+
+# =========================================================
+# Recovery cases
+# =========================================================
+
+st.divider()
+st.header("Recovery Cases")
 
 search = st.text_input(
     "Search by Case ID or Customer ID"
@@ -861,23 +1343,31 @@ search = st.text_input(
 filtered = data.copy()
 
 if search:
+    case_mask = (
+        filtered["case_id"]
+        .astype(str)
+        .str.contains(
+            search,
+            case=False,
+            na=False,
+        )
+    )
+
+    customer_mask = (
+        filtered["customer_id"]
+        .astype(str)
+        .str.contains(
+            search,
+            case=False,
+            na=False,
+        )
+        if "customer_id" in filtered.columns
+        else False
+    )
 
     filtered = filtered[
-        filtered["case_id"]
-        .str.contains(
-            search,
-            case=False,
-            na=False,
-        )
-        |
-        filtered["customer_id"]
-        .str.contains(
-            search,
-            case=False,
-            na=False,
-        )
+        case_mask | customer_mask
     ]
-
 
 display_columns = [
     "case_id",
@@ -890,11 +1380,19 @@ display_columns = [
     "final_status",
     "attempts",
     "total_recovered",
+    "confidence_score",
+    "confidence_level",
+]
+
+available_display_columns = [
+    column
+    for column in display_columns
+    if column in filtered.columns
 ]
 
 st.dataframe(
     filtered[
-        display_columns
+        available_display_columns
     ].sort_values(
         "recovery_amount",
         ascending=False,
@@ -904,15 +1402,12 @@ st.dataframe(
 )
 
 
-# --------------------------------------------------
+# =========================================================
 # Case investigation
-# --------------------------------------------------
+# =========================================================
 
 st.divider()
-
-st.header(
-    "Case Investigation"
-)
+st.header("🔎 Case Investigation")
 
 case_ids = (
     data["case_id"]
@@ -921,9 +1416,7 @@ case_ids = (
 )
 
 default_case = (
-    case_ids.index(
-        "CASE_000022"
-    )
+    case_ids.index("CASE_000022")
     if "CASE_000022" in case_ids
     else 0
 )
@@ -934,42 +1427,42 @@ selected_case = st.selectbox(
     index=default_case,
 )
 
-
 case = data[
-    data["case_id"]
-    == selected_case
+    data["case_id"] == selected_case
 ].iloc[0]
 
 
-# --------------------------------------------------
-# Case summary
-# --------------------------------------------------
-
-col1, col2, col3, col4 = st.columns(4)
+col1, col2, col3, col4, col5 = st.columns(5)
 
 with col1:
     st.metric(
         "Recovery Amount",
         format_inr(
-            case[
-                "recovery_amount"
-            ]
+            safe_number(
+                case,
+                "recovery_amount",
+            )
         ),
     )
 
 with col2:
     st.metric(
         "ML Probability",
-        f"{case['recovery_probability']:.1%}",
+        (
+            f"{safe_number(case, 'recovery_probability'):.1%}"
+            if "recovery_probability" in case
+            else "—"
+        ),
     )
 
 with col3:
     st.metric(
         "Expected Recovery",
         format_inr(
-            case[
-                "expected_recovery"
-            ]
+            safe_number(
+                case,
+                "expected_recovery",
+            )
         ),
     )
 
@@ -977,73 +1470,95 @@ with col4:
     st.metric(
         "ERV",
         format_inr(
-            case["erv"]
+            safe_number(
+                case,
+                "erv",
+            )
+        ),
+    )
+
+with col5:
+    confidence = case.get(
+        "confidence_score"
+    )
+
+    st.metric(
+        "Confidence",
+        (
+            "—"
+            if pd.isna(confidence)
+            else f"{float(confidence):.3f}"
         ),
     )
 
 
 st.write(
     f"**Customer:** "
-    f"{case['customer_id']}"
+    f"{case.get('customer_id', '—')}"
 )
 
 st.write(
     f"**Failure category:** "
-    f"{case['failure_category']}"
+    f"{case.get('failure_category', '—')}"
+)
+
+st.write(
+    f"**Final status:** "
+    f"{case.get('final_status', '—')}"
 )
 
 st.write(
     f"**Surfaces:** "
-    f"{case['surfaces']}"
+    f"{case.get('surfaces', '—')}"
 )
 
 st.write(
-    f"**Initial action:** "
-    f"{case['final_action']}"
+    f"**Initial / final action:** "
+    f"{case.get('final_action', '—')}"
 )
 
 st.write(
     f"**Decision reason:** "
-    f"{case['decision_reason']}"
+    f"{case.get('decision_reason', '—')}"
 )
 
 st.write(
     f"**Guardrail:** "
-    f"{case['guardrail_status']}"
+    f"{case.get('guardrail_status', '—')}"
+)
+
+st.write(
+    f"**Confidence level:** "
+    f"{case.get('confidence_level', 'not_evaluated')}"
 )
 
 
-# --------------------------------------------------
+# =========================================================
 # Audit timeline
-# --------------------------------------------------
+# =========================================================
 
-st.subheader(
-    "Agent Audit Timeline"
-)
+st.subheader("Agent Audit Timeline")
 
 audit = parse_audit_trail(
-    case["audit_trail"]
+    case.get(
+        "audit_trail",
+        "[]",
+    )
 )
 
 if not audit:
-
     st.info(
         "No audit events available."
     )
 
 else:
-
     for event in audit:
-
         event_type = event.get(
             "event",
             "event",
         )
 
-        if event_type == (
-            "action_selected"
-        ):
-
+        if event_type == "action_selected":
             st.info(
                 f"🎯 **Action selected:** "
                 f"{event.get('action')} "
@@ -1051,10 +1566,7 @@ else:
                 f"{event.get('attempt_number')})"
             )
 
-        elif event_type == (
-            "action_executed"
-        ):
-
+        elif event_type == "action_executed":
             status = event.get(
                 "verification_status"
             )
@@ -1066,27 +1578,18 @@ else:
                 f"**{status}**"
             )
 
-        elif event_type == (
-            "recovery_verified"
-        ):
-
+        elif event_type == "recovery_verified":
             st.success(
                 f"✅ **Recovery verified:** "
                 f"{format_inr(event.get('amount', 0))}"
             )
 
-        elif event_type == (
-            "recovery_failed"
-        ):
-
+        elif event_type == "recovery_failed":
             st.warning(
                 "❌ Recovery attempt failed."
             )
 
-        elif event_type == (
-            "next_action_evaluation"
-        ):
-
+        elif event_type == "next_action_evaluation":
             st.info(
                 f"🔄 **Next action:** "
                 f"{event.get('next_action')} "
@@ -1094,31 +1597,31 @@ else:
                 f"{format_inr(event.get('erv', 0))})"
             )
 
-        elif event_type == (
-            "escalation"
-        ):
-
+        elif event_type == "escalation":
             st.error(
                 "👤 **Escalated to manual review.**"
             )
 
-        elif event_type == (
-            "stopping_decision"
-        ):
-
+        elif event_type == "stopping_decision":
             st.warning(
                 f"🛑 **Stopped:** "
                 f"{event.get('reason', '')}"
             )
 
+        else:
+            st.caption(
+                f"• {event_type}: {event}"
+            )
 
-# --------------------------------------------------
+
+# =========================================================
 # Footer
-# --------------------------------------------------
+# =========================================================
 
 st.divider()
 
 st.caption(
-    "RecoverAI | Synthetic evaluation environment | "
-    "ML-assisted recovery with deterministic guardrails"
+    "RecoverAI | Held-out unseen evaluation | "
+    "ML-assisted recovery with deterministic guardrails | "
+    "Confidence-aware agent behavior"
 )
