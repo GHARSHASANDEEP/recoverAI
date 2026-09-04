@@ -345,17 +345,15 @@ data["audit_event_count"] = pd.to_numeric(
 # =========================================================
 
 st.title("RecoverAI")
-st.subheader("Intelligent Payment Recovery Platform")
+st.subheader("Revenue Recovery Control Room")
 
 st.caption(
     "Diagnose → Predict → Optimize → Execute → Verify → Recover"
 )
 
-st.success(
-    "🧪 Unseen Evaluation Mode — dashboard metrics below are "
-    "generated from the held-out recovery population, not the "
-    "development sample. Outcomes are simulated benchmark results; "
-    "production payment verification is provider-controlled."
+st.info(
+    "UNSEEN BENCHMARK | 3,262 held-out cases | simulated outcomes only | "
+    "Razorpay Test Mode webhook verified | no production money movement"
 )
 
 headline_cases = len(data)
@@ -371,8 +369,8 @@ headline_baseline_money = float(
 )
 
 st.caption(
-    "JUDGE SUMMARY | Razorpay Test Mode webhook verified | "
-    "Benchmark outcomes are simulated, not production revenue."
+    "JUDGE BRIEF | Same-population comparison, verified workflow evidence, "
+    "and controlled autonomy. Start with Judge Mode below."
 )
 
 headline_col1, headline_col2, headline_col3, headline_col4 = st.columns(4)
@@ -387,6 +385,11 @@ with headline_col4:
         "Incremental vs baseline",
         format_inr(headline_money - headline_baseline_money),
     )
+
+st.caption(
+    "RecoverAI is not a blind retry engine: ML recommends, policy constrains, "
+    "guardrails authorize, and provider events verify the result."
+)
 
 
 # =========================================================
