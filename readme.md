@@ -132,6 +132,124 @@ POST /webhooks/razorpay
 
 For Razorpay to reach a local receiver, expose port 8000 through an authenticated HTTPS tunnel. Register the tunnel URL plus `/webhooks/razorpay` in Razorpay Test Mode. The tunnel URL is temporary and only works while the receiver and tunnel processes are running.
 
+## Repository Structure
+
+```text
+recoverAI/
+|-- app.py                              # Streamlit dashboard and Judge Mode
+|-- requirements.txt                    # Pinned Python dependencies
+|-- run_webhook.ps1                     # Starts the webhook receiver
+|-- train_recoverability_model_v3.py    # Trains the V3 model
+|-- score_recoverability_v3.py          # Scores development cases
+|-- readme.md                           # Project documentation
+|
+|-- src/
+|   |-- data/
+|   |   |-- config.py                    # Seeds, sizes, policy constants
+|   |   |-- generator.py                 # Development data generator
+|   |   |-- unseen_generator.py          # Held-out population generator
+|   |   |-- taxonomy.py                  # Failure categories and code mapping
+|   |   |-- outcome_rules.py             # Synthetic benchmark rules
+|   |   `-- outcome_simulator.py         # Deterministic outcomes
+|   |
+|   |-- engine/
+|   |   |-- normalizer.py                # Common event schema
+|   |   |-- deduplicator.py              # Payment/checkout matching
+|   |   |-- case_builder.py              # Recovery case construction
+|   |   |-- recovery_policy.py           # Failure-aware action sequence
+|   |   |-- decision_engine.py           # Guardrails and decisions
+|   |   |-- recovery_agent.py            # Closed-loop agent
+|   |   |-- recovery_state_machine.py    # Lifecycle transitions
+|   |   |-- executor.py                  # Execution and verification
+|   |   |-- channel_policy.py             # Consent-aware channel selection
+|   |   `-- *_batch.py                   # Batch pipeline entry points
+|   |
+|   |-- model/
+|   |   |-- training_data.py             # Training-row construction
+|   |   |-- predictor.py                 # Shared prediction interface
+|   |   |-- action_recommender.py        # Action-conditioned scoring
+|   |   `-- recovery_memory.py           # Verified-outcome feedback
+|   |
+|   `-- integrations/
+|       |-- razorpay_events.py           # Signature and event normalization
+|       |-- webhook_server.py            # Local HTTP webhook receiver
+|       |-- razorpay_provider.py          # Optional Payment Link client
+|       `-- provider_boundary.py         # Live side-effect boundary
+|
+|-- data/
+|   |-- raw/                             # Development source datasets
+|   |-- processed/                       # Development cases and reports
+|   `-- unseen/                          # Isolated held-out population
+|       |-- raw/
+|       `-- processed/
+|
+|-- models/                              # Saved models and reports
+`-- tests/                               # Unit and integration tests
+```
+
+## End-To-End Pipeline
+
+The development pipeline runs from raw revenue-risk data to a measured
+agent-versus-baseline result:
+
+```text
+1. Generate source data
+  src.data.generator -> data/raw/*.csv
+
+2. Normalize failed payments, failed subscriptions,
+  abandoned checkouts, and overdue invoices
+  -> unified actionable event schema
+
+3. Match related payment and checkout events
+  -> one-to-one deduplicated recovery opportunities
+
+4. Build recovery cases
+  -> data/processed/recovery_cases.csv
+
+5. Build training rows
+  -> data/processed/training_data.csv
+
+6. Train the case-level V3 model
+  -> models/recovery_probability_model_v3.joblib
+  -> models/recovery_model_v3_report.json
+
+7. Score recoverability and action economics
+  -> data/processed/erv_scores.csv
+
+8. Apply policy and deterministic guardrails
+  -> data/processed/decisions.csv
+
+9. Execute, verify, and audit bounded recovery
+  -> data/processed/agent_results.csv
+  -> data/processed/execution_results.csv
+
+10. Compare with the one-retry baseline
+   -> baseline_results.csv and evaluation reports
+```
+
+The held-out submission path uses separate unseen inputs:
+
+```text
+unseen_generator
+  -> unseen_case_builder
+  -> unseen_erv_batch
+  -> unseen_decision_batch
+  -> unseen_agent_batch
+  -> unseen_baseline_batch
+  -> data/unseen/processed/*.csv
+```
+
+The live Test Mode event path is independent of the batch benchmark:
+
+```text
+Razorpay webhook
+  -> raw-body signature verification
+  -> provider event-ID idempotency
+  -> event normalization
+  -> recovery_ready or recovered workflow
+  -> persisted event and workflow records
+```
+
 ## Safety And Failure Handling
 
 Examples of the recovery policy:
