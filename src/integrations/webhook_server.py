@@ -137,8 +137,23 @@ class WebhookHandler(BaseHTTPRequestHandler):
         self.wfile.write(encoded)
 
     def do_GET(self) -> None:
+        if self.path == "/":
+            self._send_json(200, {
+                "service": "RecoverAI Razorpay webhook receiver",
+                "status": "running",
+                "health": "/health",
+                "webhook": "POST /webhooks/razorpay",
+            })
+            return
         if self.path == "/health":
             self._send_json(200, {"status": "ok"})
+            return
+        if self.path == "/webhooks/razorpay":
+            self._send_json(405, {
+                "error": "method_not_allowed",
+                "message": "Use POST with a signed Razorpay webhook payload.",
+                "health": "/health",
+            })
             return
         self._send_json(404, {"error": "not_found"})
 
