@@ -348,9 +348,10 @@ def run_recovery_case(
                         ↓
                    NEXT ACTION
 
-    The action-conditioned model ranks the policy-permitted
-    actions. Guardrails determine whether the model-selected
-    action is safe and retain final authority.
+    Policy determines the recovery sequence.
+    Guardrails determine whether an action is safe.
+    ERV evaluates the current policy-approved action
+    but cannot skip recovery stages.
     Confidence is recorded as an explanatory signal.
     """
 
@@ -415,16 +416,14 @@ def run_recovery_case(
         failure_category
     )
 
-    policy_initial_action = get_initial_action(failure_category) if permitted_actions else None
-    initial_decision = select_next_action(
-        current_case,
-        action_scores,
-        attempted_actions,
-    ) if permitted_actions else {"final_action": "stop"}
-    initial_action = initial_decision.get(
-        "final_action",
-        current_case.get("final_action", "stop"),
-    )
+    if permitted_actions:
+        policy_initial_action = get_initial_action(failure_category)
+    else:
+        policy_initial_action = None
+
+    initial_action = policy_initial_action
+    if initial_action is None:
+        initial_action = current_case.get("final_action", "stop")
 
     # Make policy decision visible to the audit trail.
 
@@ -445,8 +444,8 @@ def run_recovery_case(
                 failure_category
             ),
             "reason": (
-                "AI selected the highest-value action within "
-                "the failure-aware policy-permitted action set."
+                "Initial recovery action selected from "
+                "failure-aware recovery policy."
             ),
         }
     )
@@ -505,8 +504,8 @@ def run_recovery_case(
                 "margin_confidence"
             ],
             "reason": (
-                "Confidence measured for the AI-selected action "
-                "within the policy-permitted action set."
+                "Confidence measured for the policy-selected "
+                "initial action. It does not override the action."
             ),
         }
     )
@@ -1239,7 +1238,7 @@ def run_recovery_case(
                 RECOVERY_READY,
                 (
                     "Case reassessed and ready for the next "
-                    "AI-ranked policy-permitted action."
+                    "policy-defined recovery action."
                 ),
             )
         )
@@ -1263,9 +1262,9 @@ def run_recovery_case(
                 "recovery_sequence": get_recovery_sequence(
                     failure_category
                 ),
-                    "reason": (
-                    "Policy supplied the permitted action set; "
-                    "the model ranks the next untried action."
+                "reason": (
+                    "Next action selected from the failure-aware "
+                    "recovery sequence. ERV cannot skip this policy stage."
                 ),
             }
         )
@@ -1274,6 +1273,7 @@ def run_recovery_case(
             current_case,
             action_scores,
             attempted_actions,
+            policy_action=policy_next_action,
         )
 
         audit_events.append(

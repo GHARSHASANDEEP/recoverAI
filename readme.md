@@ -2,9 +2,9 @@
 
 **Razorpay Buildathon Track 03 — AI Revenue Recovery**
 
-RecoverAI recovered **42.98% of failed payments** versus **35.84% for a one-retry baseline** — a
-**+7.14 percentage-point improvement** — on 3,262 held-out unseen cases, recovering
-**₹34,772,113 simulated** versus ₹30,996,494 for the baseline, a difference of **₹3,775,618**.
+RecoverAI recovered **50.34% of failed payments** versus **35.84% for a one-retry baseline** — a
+**+14.50 percentage-point improvement** — on 3,262 held-out unseen cases, recovering
+**₹40,566,782 simulated** versus ₹30,996,494 for the baseline, a difference of **₹9,570,288**.
 
 > These are deterministic simulated benchmark outcomes on an isolated unseen population.
 > All customer identities, contact data, and payment records are synthetic. No real customer
@@ -48,11 +48,11 @@ advisory and cannot authorize an action outside policy or deterministic guardrai
 
 | Strategy | Recovery rate | Cases recovered | Simulated recovery |
 |---|---:|---:|---:|
-| RecoverAI | 42.98% | 1,402 | ₹34,772,113 |
+| RecoverAI | 50.34% | 1,642 | ₹40,566,782 |
 | One-retry baseline | 35.84% | 1,169 | ₹30,996,494 |
-| Difference | **+7.14 pp** | **+233** | **+₹3,775,618** |
+| Difference | **+14.50 pp** | **+473** | **+₹9,570,288** |
 
-RecoverAI also recorded 4,346 automated attempts, 1,748 safe escalations, and 112 stopped cases.
+RecoverAI also recorded 3,940 automated attempts, 1,532 safe escalations, and 88 stopped cases.
 Every transition has an audit event.
 
 ---
@@ -81,8 +81,8 @@ Two complementary models:
   using action-conditioned probability × amount − cost (Expected Recovery Value).
 
 Neither model can override consent, risk policy, retry limits, or merchant guardrails.
-The action recommender is the primary action-ranking signal within the policy-permitted set,
-trained on the synthetic benchmark.
+The action recommender ranks permitted actions as an explainable decision-support signal,
+while the failure-aware policy controls the safe recovery sequence.
 A production deployment would retrain on verified merchant outcomes.
 
 ---

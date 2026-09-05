@@ -143,7 +143,7 @@ def main():
         )
 
         # -----------------------------------------------------
-        # 1. POLICY DEFINES THE SAFE ACTION SET
+        # 1. POLICY SELECTS THE RECOVERY STAGE
         # -----------------------------------------------------
 
         policy_action = get_initial_action(
@@ -159,25 +159,12 @@ def main():
         )
 
         # -----------------------------------------------------
-        # 2. AI SELECTS THE BEST PERMITTED ACTION
+        # 2. GET ECONOMIC SIGNAL FOR THAT ACTION
         # -----------------------------------------------------
-
-        permitted_rows = case_erv[
-            case_erv["action"].astype(str).isin(permitted_actions)
-        ].sort_values(
-            ["erv", "recovery_probability"],
-            ascending=[False, False],
-        )
-
-        ai_action = (
-            str(permitted_rows.iloc[0]["action"])
-            if not permitted_rows.empty
-            else str(policy_action)
-        )
 
         action_row = case_erv[
             case_erv["action"].astype(str)
-            == ai_action
+            == str(policy_action)
         ]
 
         if action_row.empty:
@@ -235,7 +222,7 @@ def main():
 
         guardrail = evaluate_guardrails(
             case_context,
-            ai_action,
+            policy_action,
         )
 
         allowed = bool(
@@ -256,12 +243,11 @@ def main():
 
         if allowed:
 
-            final_action = ai_action
+            final_action = policy_action
 
             decision_reason = (
-                f"AI selected "
-                f"'{ai_action}' within the policy-permitted actions "
-                f"for failure "
+                f"Policy selected "
+                f"'{policy_action}' for failure "
                 f"category "
                 f"'{failure_category}'. "
                 f"Guardrail allowed execution."
@@ -297,7 +283,7 @@ def main():
                 "final_action": final_action,
 
                 "policy_action": policy_action,
-                "ai_recommendation": ai_action,
+                "ai_recommendation": policy_action,
 
                 "permitted_actions": ",".join(
                     permitted_actions

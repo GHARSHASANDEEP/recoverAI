@@ -48,7 +48,7 @@ def test_judgment_explains_risk_decline_block():
     assert any("unsafe for automatic retry" in item for item in result["evidence"])
 
 
-def test_ai_selects_permitted_action_over_policy_default():
+def test_ai_ranks_permitted_action_candidates():
     result = select_next_action(
         {
             "case_id": "CASE_AI_1",
@@ -62,4 +62,3 @@ def test_ai_selects_permitted_action_over_policy_default():
     )
 
     assert result["final_action"] == "retry"
-    assert result["final_action"] != "reminder"
