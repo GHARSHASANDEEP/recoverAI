@@ -213,16 +213,122 @@ Try `risk_decline` to see a blocked retry. Try `temporary_bank_failure` to see a
 .\.venv\Scripts\python.exe -m src.engine.unseen_baseline_batch
 ```
 
-### Run the webhook receiver
+### Razorpay Test Mode integration
+
+The integration has two separate responsibilities:
+
+1. The webhook receiver verifies and records Razorpay events.
+2. The provider boundary can create an approved Test Mode payment link.
+
+The webhook receiver does not silently execute payment actions. A payment becomes verified
+recovery only after a `payment.captured`, `payment_link.paid`, or `order.paid` event. A
+`payment.authorized` event remains observed until capture.
+
+#### 1. Start RecoverAI locally
+
+Use one PowerShell terminal. The secret here must exactly match the secret saved in Razorpay:
 
 ```powershell
-.\run_webhook.ps1 -WebhookSecret "YOUR_RAZORPAY_WEBHOOK_SECRET"
+$env:RAZORPAY_WEBHOOK_SECRET = "YOUR_RAZORPAY_WEBHOOK_SECRET"
+$env:RECOVERAI_WEBHOOK_HOST = "127.0.0.1"
+$env:RECOVERAI_WEBHOOK_PORT = "8001"
+.\run_webhook.ps1 -WebhookSecret $env:RAZORPAY_WEBHOOK_SECRET
 ```
 
-Listens on `http://127.0.0.1:8000`. Routes: `GET /health`, `POST /webhooks/razorpay`.
-Expose via an authenticated HTTPS tunnel and register the URL in Razorpay Test Mode. The
-receiver is intentionally observation-only: it verifies and records provider events; a caller
-must separately invoke the Test Mode payment-link provider after policy approval.
+The receiver exposes:
+
+```text
+GET  http://127.0.0.1:8001/          service status and route information
+GET  http://127.0.0.1:8001/health    health check
+GET  http://127.0.0.1:8001/latest    latest recovered workflow
+POST http://127.0.0.1:8001/webhooks/razorpay  signed Razorpay webhook
+```
+
+Opening `/webhooks/razorpay` in a browser sends `GET`, but the webhook route requires a
+signed `POST`; use `/health` or `/latest` for browser checks.
+
+#### 2. Expose the local receiver
+
+In a second PowerShell terminal:
+
+```powershell
+ngrok http 8001
+```
+
+Copy the current `https://...ngrok...` forwarding URL. Do not reuse an old URL after restarting
+ngrok; free ngrok URLs can change.
+
+#### 3. Configure Razorpay Test Mode
+
+In the Razorpay Dashboard:
+
+1. Switch to **Test Mode**.
+2. Open **Settings -> Webhooks**.
+3. Edit the existing webhook or create one once. Do not create duplicates for every test.
+4. Set the URL to:
+
+```text
+https://YOUR_CURRENT_NGROK_URL/webhooks/razorpay
+```
+
+5. Set the webhook secret to the same value used by `RAZORPAY_WEBHOOK_SECRET`.
+6. Enable `payment.failed`, `payment.authorized`, `payment.captured`, `payment_link.paid`,
+   `payment_link.expired`, and `order.paid`.
+7. Save the webhook and use Razorpay's test-webhook control if available.
+
+The request path is:
+
+```text
+Razorpay Test Mode
+  -> public HTTPS ngrok URL
+  -> local POST /webhooks/razorpay
+  -> HMAC signature verification
+  -> event-ID idempotency
+  -> event normalization and case correlation
+  -> recovery workflow and verified audit record
+```
+
+#### 4. Verify a payment event
+
+After a Test Mode payment, check the webhook server terminal for:
+
+```text
+POST /webhooks/razorpay HTTP/1.1" 200
+```
+
+Then open:
+
+```text
+http://127.0.0.1:8001/latest
+```
+
+An accepted captured or paid event should show:
+
+```json
+{
+  "event_type": "payment_captured",
+  "status": "recovered",
+  "verified": true
+}
+```
+
+The detailed audit files are:
+
+```text
+data/processed/razorpay_webhook_events.jsonl
+data/processed/razorpay_recovery_workflow.jsonl
+```
+
+#### 5. Troubleshoot common tunnel errors
+
+`ERR_NGROK_334` means the requested ngrok endpoint is already online or conflicts with an
+existing tunnel. Stop the old ngrok terminal before starting another one, or keep the existing
+tunnel and use the forwarding URL it already displays. Then update Razorpay if the URL changed.
+
+If events return HTTP `400`, compare the Razorpay webhook secret with the secret in the running
+receiver. If events never arrive, confirm that ngrok is running, the URL contains
+`/webhooks/razorpay`, and the Razorpay webhook is in Test Mode. Test payments do not move real
+money; they only generate provider events and test-state transitions.
 
 ---
 
