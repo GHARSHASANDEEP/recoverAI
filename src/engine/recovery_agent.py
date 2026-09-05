@@ -348,10 +348,9 @@ def run_recovery_case(
                         ↓
                    NEXT ACTION
 
-    Policy determines the recovery sequence.
-    Guardrails determine whether an action is safe.
-    ERV evaluates the current policy-approved action
-    but cannot skip recovery stages.
+    The action-conditioned model ranks the policy-permitted
+    actions. Guardrails determine whether the model-selected
+    action is safe and retain final authority.
     Confidence is recorded as an explanatory signal.
     """
 
@@ -416,26 +415,16 @@ def run_recovery_case(
         failure_category
     )
 
-    if permitted_actions:
-
-        policy_initial_action = (
-            get_initial_action(
-                failure_category
-            )
-        )
-
-    else:
-
-        policy_initial_action = None
-
-    initial_action = policy_initial_action
-
-    if initial_action is None:
-
-        initial_action = current_case.get(
-            "final_action",
-            "stop",
-        )
+    policy_initial_action = get_initial_action(failure_category) if permitted_actions else None
+    initial_decision = select_next_action(
+        current_case,
+        action_scores,
+        attempted_actions,
+    ) if permitted_actions else {"final_action": "stop"}
+    initial_action = initial_decision.get(
+        "final_action",
+        current_case.get("final_action", "stop"),
+    )
 
     # Make policy decision visible to the audit trail.
 
@@ -456,8 +445,8 @@ def run_recovery_case(
                 failure_category
             ),
             "reason": (
-                "Initial recovery action selected "
-                "from failure-aware recovery policy."
+                "AI selected the highest-value action within "
+                "the failure-aware policy-permitted action set."
             ),
         }
     )
@@ -516,8 +505,8 @@ def run_recovery_case(
                 "margin_confidence"
             ],
             "reason": (
-                "Confidence measured for the policy-selected "
-                "initial action. It does not override the action."
+                "Confidence measured for the AI-selected action "
+                "within the policy-permitted action set."
             ),
         }
     )
@@ -1237,7 +1226,7 @@ def run_recovery_case(
             }
 
         # --------------------------------------------------
-        # Select next policy-defined action
+        # Select next AI-ranked permitted action
         # --------------------------------------------------
 
         state_machine.transition(
@@ -1249,17 +1238,12 @@ def run_recovery_case(
                 REASSESS,
                 RECOVERY_READY,
                 (
-                    "Case reassessed and ready "
-                    "for the next policy-defined "
-                    "recovery action."
+                    "Case reassessed and ready for the next "
+                    "AI-ranked policy-permitted action."
                 ),
             )
         )
 
-        # The policy sequence determines the next stage.
-        # This is deliberately separated from ERV so that
-        # ERV cannot jump over a customer-resolvable step
-        # and immediately escalate the case.
         policy_next_action = get_next_policy_action(
             failure_category,
             attempted_actions,
@@ -1279,21 +1263,17 @@ def run_recovery_case(
                 "recovery_sequence": get_recovery_sequence(
                     failure_category
                 ),
-                "reason": (
-                    "Next action selected from the "
-                    "failure-aware recovery sequence. "
-                    "ERV cannot skip this policy stage."
+                    "reason": (
+                    "Policy supplied the permitted action set; "
+                    "the model ranks the next untried action."
                 ),
             }
         )
 
-        # ERV/ML now evaluates only the action that the
-        # recovery policy has selected for this stage.
         next_decision = select_next_action(
             current_case,
             action_scores,
             attempted_actions,
-            policy_action=policy_next_action,
         )
 
         audit_events.append(

@@ -143,7 +143,7 @@ def main():
         )
 
         # -----------------------------------------------------
-        # 1. POLICY SELECTS THE RECOVERY STAGE
+        # 1. POLICY DEFINES THE SAFE ACTION SET
         # -----------------------------------------------------
 
         policy_action = get_initial_action(
@@ -159,16 +159,25 @@ def main():
         )
 
         # -----------------------------------------------------
-        # 2. GET ECONOMIC SIGNAL FOR THAT ACTION
-        #
-        # ERV does NOT select the action.
-        # It only tells the guardrail whether the
-        # already-selected action is economically viable.
+        # 2. AI SELECTS THE BEST PERMITTED ACTION
         # -----------------------------------------------------
+
+        permitted_rows = case_erv[
+            case_erv["action"].astype(str).isin(permitted_actions)
+        ].sort_values(
+            ["erv", "recovery_probability"],
+            ascending=[False, False],
+        )
+
+        ai_action = (
+            str(permitted_rows.iloc[0]["action"])
+            if not permitted_rows.empty
+            else str(policy_action)
+        )
 
         action_row = case_erv[
             case_erv["action"].astype(str)
-            == str(policy_action)
+            == ai_action
         ]
 
         if action_row.empty:
@@ -226,7 +235,7 @@ def main():
 
         guardrail = evaluate_guardrails(
             case_context,
-            policy_action,
+            ai_action,
         )
 
         allowed = bool(
@@ -247,11 +256,12 @@ def main():
 
         if allowed:
 
-            final_action = policy_action
+            final_action = ai_action
 
             decision_reason = (
-                f"Policy selected "
-                f"'{policy_action}' for failure "
+                f"AI selected "
+                f"'{ai_action}' within the policy-permitted actions "
+                f"for failure "
                 f"category "
                 f"'{failure_category}'. "
                 f"Guardrail allowed execution."
@@ -287,6 +297,7 @@ def main():
                 "final_action": final_action,
 
                 "policy_action": policy_action,
+                "ai_recommendation": ai_action,
 
                 "permitted_actions": ",".join(
                     permitted_actions

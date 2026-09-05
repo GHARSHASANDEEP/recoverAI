@@ -2,9 +2,9 @@
 
 **Razorpay Buildathon Track 03 — AI Revenue Recovery**
 
-RecoverAI recovered **51.93% of failed payments** versus **35.84% for a one-retry baseline** — a
-**+16.09 percentage-point improvement** — on 3,262 held-out unseen cases, recovering
-**₹44,315,137 simulated** versus ₹30,996,494 for the baseline, a difference of **₹13,318,643**.
+RecoverAI recovered **42.98% of failed payments** versus **35.84% for a one-retry baseline** — a
+**+7.14 percentage-point improvement** — on 3,262 held-out unseen cases, recovering
+**₹34,772,113 simulated** versus ₹30,996,494 for the baseline, a difference of **₹3,775,618**.
 
 > These are deterministic simulated benchmark outcomes on an isolated unseen population.
 > All customer identities, contact data, and payment records are synthetic. No real customer
@@ -48,11 +48,11 @@ advisory and cannot authorize an action outside policy or deterministic guardrai
 
 | Strategy | Recovery rate | Cases recovered | Simulated recovery |
 |---|---:|---:|---:|
-| RecoverAI | 51.93% | 1,694 | ₹44,315,137 |
+| RecoverAI | 42.98% | 1,402 | ₹34,772,113 |
 | One-retry baseline | 35.84% | 1,169 | ₹30,996,494 |
-| Difference | **+16.09 pp** | **+525** | **+₹13,318,643** |
+| Difference | **+7.14 pp** | **+233** | **+₹3,775,618** |
 
-RecoverAI also recorded 4,092 automated attempts, 1,480 safe escalations, and 88 stopped cases.
+RecoverAI also recorded 4,346 automated attempts, 1,748 safe escalations, and 112 stopped cases.
 Every transition has an audit event.
 
 ---
@@ -81,7 +81,8 @@ Two complementary models:
   using action-conditioned probability × amount − cost (Expected Recovery Value).
 
 Neither model can override consent, risk policy, retry limits, or merchant guardrails.
-The action recommender is a prototype ranking signal trained on the synthetic benchmark.
+The action recommender is the primary action-ranking signal within the policy-permitted set,
+trained on the synthetic benchmark.
 A production deployment would retrain on verified merchant outcomes.
 
 ---
