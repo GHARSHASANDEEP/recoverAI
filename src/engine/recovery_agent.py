@@ -417,13 +417,25 @@ def run_recovery_case(
     )
 
     if permitted_actions:
-        policy_initial_action = get_initial_action(failure_category)
+
+        policy_initial_action = (
+            get_initial_action(
+                failure_category
+            )
+        )
+
     else:
+
         policy_initial_action = None
 
     initial_action = policy_initial_action
+
     if initial_action is None:
-        initial_action = current_case.get("final_action", "stop")
+
+        initial_action = current_case.get(
+            "final_action",
+            "stop",
+        )
 
     # Make policy decision visible to the audit trail.
 
@@ -444,8 +456,8 @@ def run_recovery_case(
                 failure_category
             ),
             "reason": (
-                "Initial recovery action selected from "
-                "failure-aware recovery policy."
+                "Initial recovery action selected "
+                "from failure-aware recovery policy."
             ),
         }
     )
@@ -1225,7 +1237,7 @@ def run_recovery_case(
             }
 
         # --------------------------------------------------
-        # Select next AI-ranked permitted action
+        # Select next policy-defined action
         # --------------------------------------------------
 
         state_machine.transition(
@@ -1237,12 +1249,17 @@ def run_recovery_case(
                 REASSESS,
                 RECOVERY_READY,
                 (
-                    "Case reassessed and ready for the next "
-                    "policy-defined recovery action."
+                    "Case reassessed and ready "
+                    "for the next policy-defined "
+                    "recovery action."
                 ),
             )
         )
 
+        # The policy sequence determines the next stage.
+        # This is deliberately separated from ERV so that
+        # ERV cannot jump over a customer-resolvable step
+        # and immediately escalate the case.
         policy_next_action = get_next_policy_action(
             failure_category,
             attempted_actions,
@@ -1263,12 +1280,15 @@ def run_recovery_case(
                     failure_category
                 ),
                 "reason": (
-                    "Next action selected from the failure-aware "
-                    "recovery sequence. ERV cannot skip this policy stage."
+                    "Next action selected from the "
+                    "failure-aware recovery sequence. "
+                    "ERV cannot skip this policy stage."
                 ),
             }
         )
 
+        # ERV/ML now evaluates only the action that the
+        # recovery policy has selected for this stage.
         next_decision = select_next_action(
             current_case,
             action_scores,

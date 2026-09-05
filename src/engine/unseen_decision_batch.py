@@ -160,6 +160,10 @@ def main():
 
         # -----------------------------------------------------
         # 2. GET ECONOMIC SIGNAL FOR THAT ACTION
+        #
+        # ERV does NOT select the action.
+        # It only tells the guardrail whether the
+        # already-selected action is economically viable.
         # -----------------------------------------------------
 
         action_row = case_erv[
@@ -283,7 +287,6 @@ def main():
                 "final_action": final_action,
 
                 "policy_action": policy_action,
-                "ai_recommendation": policy_action,
 
                 "permitted_actions": ",".join(
                     permitted_actions

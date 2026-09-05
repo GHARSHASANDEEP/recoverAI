@@ -1,7 +1,6 @@
 import pandas as pd
 
 from src.model.ai_judgment import judge_recovery_case
-from src.engine.recovery_agent import select_next_action
 
 
 def _scores():
@@ -46,19 +45,3 @@ def test_judgment_explains_risk_decline_block():
     assert result["recommended_action"] == "escalate"
     assert "retry" in result["blocked_actions"]
     assert any("unsafe for automatic retry" in item for item in result["evidence"])
-
-
-def test_ai_ranks_permitted_action_candidates():
-    result = select_next_action(
-        {
-            "case_id": "CASE_AI_1",
-            "failure_category": "insufficient_funds",
-            "communication_opt_in": True,
-            "attempt_number": 1,
-            "recovery_amount": 10000,
-        },
-        _scores(),
-        set(),
-    )
-
-    assert result["final_action"] == "retry"
