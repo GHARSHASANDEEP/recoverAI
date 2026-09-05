@@ -434,21 +434,19 @@ if submitted:
             permitted_actions = get_permitted_actions(judge_failure)
             sequence = get_recovery_sequence(judge_failure)
 
-            selected_rows = scores[scores["action"] == policy_initial_action].copy()
-            if selected_rows.empty:
-                raise ValueError(f"No model score for policy action: {policy_initial_action}")
-            selected = selected_rows.iloc[0]
-
-            guardrail = evaluate_guardrails(
-                {**judge_case, "erv": float(selected.get("erv", 0.0))},
-                policy_initial_action,
-            )
-
             model_candidates = scores[scores["action"].isin(permitted_actions)].sort_values(
                 ["erv", "recovery_probability"], ascending=[False, False]
             )
             ai_recommendation = str(model_candidates.iloc[0]["action"]) if not model_candidates.empty else "stop"
-            ai_recommendation_row = model_candidates.iloc[0] if not model_candidates.empty else selected
+            policy_rows = scores[scores["action"] == policy_initial_action]
+            policy_row = policy_rows.iloc[0] if not policy_rows.empty else scores.iloc[0]
+            ai_recommendation_row = model_candidates.iloc[0] if not model_candidates.empty else policy_row
+            selected = ai_recommendation_row
+
+            guardrail = evaluate_guardrails(
+                {**judge_case, "erv": float(selected.get("erv", 0.0))},
+                ai_recommendation,
+            )
             ai_judgment = judge_recovery_case(
                 judge_case,
                 scores,
@@ -456,9 +454,9 @@ if submitted:
             )
 
             decision = {
-                "final_action": policy_initial_action if guardrail["allowed"] else "stop",
+                "final_action": ai_recommendation if guardrail["allowed"] else "stop",
                 "decision_reason": guardrail["reason"] if not guardrail["allowed"] else (
-                    f"Policy selected {policy_initial_action} as the first safe recovery stage for {judge_failure}."
+                    f"AI selected {ai_recommendation} as the highest-value action permitted for {judge_failure}."
                 ),
                 "guardrail_status": "passed" if guardrail["allowed"] else "blocked",
                 "recovery_probability": float(selected["recovery_probability"]),
