@@ -38,6 +38,10 @@ revenue-risk event
 
 **ML recommends. Policy constrains. Guardrails authorize. Provider executes. Event verifies.**
 
+Judge Mode also exposes an explainable AI judgment: recommended action, confidence level,
+supporting evidence, blocked candidates, and a counterfactual next step. This judgment is
+advisory and cannot authorize an action outside policy or deterministic guardrails.
+
 ---
 
 ## Measured Result
@@ -184,7 +188,7 @@ python -m pip install -r requirements.txt
 .\.venv\Scripts\python.exe -m compileall -q app.py src
 ```
 
-87 tests covering policy, guardrails, state transitions, unseen-data joins, action scoring,
+89 tests covering policy, guardrails, state transitions, unseen-data joins, action scoring,
 channels, memory, webhook signatures, idempotency, and Razorpay event payloads. 0 failures.
 
 ### Run the dashboard
@@ -231,7 +235,7 @@ must separately invoke the Test Mode payment-link provider after policy approval
 | `src/model/` | V3 training, V2 action recommender, confidence scoring, recovery memory |
 | `src/integrations/` | Razorpay webhook receiver, event normalization, provider boundary |
 | `src/data/` | Generators, taxonomy, outcome simulator |
-| `tests/` | 87 regression tests |
+| `tests/` | 89 regression tests |
 | `models/` | Trained artifacts + V3 evaluation report |
 | `data/unseen/processed/` | Held-out evaluation outputs |
 
@@ -248,6 +252,6 @@ A production deployment would retrain the action recommender on verified merchan
 ## Project Status
 
 Working Track 03 prototype. Reproducible unseen benchmark. Test Mode Razorpay webhook receiver.
-Policy-controlled agent. 87 passing tests. 0 compile errors.
+Policy-controlled agent. 89 passing tests. 0 compile errors.
 
 Does not claim simulated benchmark money is real revenue or that Test Mode is production processing.

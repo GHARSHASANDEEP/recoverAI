@@ -10,6 +10,7 @@ from src.engine.erv import score_case_actions
 from src.engine.recovery_agent import run_recovery_case
 from src.engine.channel_policy import choose_recovery_channel
 from src.engine.recovery_policy import get_initial_action, get_permitted_actions, get_recovery_sequence
+from src.model.ai_judgment import judge_recovery_case
 
 st.set_page_config(
     page_title="RecoverAI — Razorpay Buildathon Track 03",
@@ -448,6 +449,11 @@ if submitted:
             )
             ai_recommendation = str(model_candidates.iloc[0]["action"]) if not model_candidates.empty else "stop"
             ai_recommendation_row = model_candidates.iloc[0] if not model_candidates.empty else selected
+            ai_judgment = judge_recovery_case(
+                judge_case,
+                scores,
+                policy_initial_action,
+            )
 
             decision = {
                 "final_action": policy_initial_action if guardrail["allowed"] else "stop",
@@ -539,6 +545,21 @@ if submitted:
                 st.success(f"✓ Guardrail passed: {guardrail['reason']}")
             else:
                 st.error(f"✗ Guardrail blocked: {guardrail['reason']}")
+
+            st.subheader("AI Judgment — Evidence & Uncertainty")
+            j1, j2, j3 = st.columns(3)
+            with j1:
+                st.metric("Judgment", ai_judgment["verdict"].upper())
+            with j2:
+                st.metric("Judgment Action", ai_judgment["recommended_action"].upper())
+            with j3:
+                st.metric("Judgment Confidence", f"{ai_judgment['confidence_score']:.0%} ({ai_judgment['confidence_level']})")
+            st.markdown("**Why this judgment:**")
+            for evidence in ai_judgment["evidence"]:
+                st.write(f"- {evidence}")
+            if ai_judgment["blocked_actions"]:
+                st.warning("Blocked candidates: " + ", ".join(ai_judgment["blocked_actions"]))
+            st.info("Counterfactual: " + ai_judgment["counterfactual"])
 
             # Step 4: Priority + Channel
             st.subheader("Step 4 — Priority Scoring & Channel Selection")
@@ -928,7 +949,7 @@ st.divider()
 st.markdown(
     "<div style='text-align:center;color:#888;font-size:0.85rem'>"
     "RecoverAI · Razorpay Buildathon Track 03 · AI Revenue Recovery · "
-    "87 passing tests · Held-out unseen benchmark · "
+    "89 passing tests · Held-out unseen benchmark · "
     "ML-assisted recovery with deterministic guardrails · "
     "Razorpay Test Mode webhook verified"
     "</div>",
