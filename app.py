@@ -473,7 +473,10 @@ if submitted:
                 "ai_recommendation_erv": float(ai_recommendation_row.get("erv", 0.0)),
             }
 
-            st.success("✓ RecoverAI diagnosed the failure and selected a bounded recovery strategy.")
+            if guardrail["allowed"]:
+                st.success("✓ RecoverAI diagnosed the failure and selected a bounded recovery strategy.")
+            else:
+                st.error("✗ RecoverAI blocked the proposed action and will not send or execute it.")
 
             why_failed, strategy = failure_explanation(judge_failure)
 
@@ -523,7 +526,12 @@ if submitted:
             with d1:
                 st.metric("AI Recommendation", ai_recommendation.upper())
             with d2:
-                st.metric("Policy Action", policy_initial_action.upper())
+                st.metric(
+                    "Policy Proposal",
+                    policy_initial_action.upper(),
+                    delta="BLOCKED" if not guardrail["allowed"] else "PERMITTED",
+                    delta_color="inverse" if not guardrail["allowed"] else "normal",
+                )
             with d3:
                 st.metric("Guardrail", "✓ PASSED" if guardrail["allowed"] else "✗ BLOCKED")
             with d4:
@@ -545,6 +553,8 @@ if submitted:
                 st.success(f"✓ Guardrail passed: {guardrail['reason']}")
             else:
                 st.error(f"✗ Guardrail blocked: {guardrail['reason']}")
+                if policy_initial_action == "reminder" and not judge_opt_in:
+                    st.warning("No reminder was sent: the customer is opted out of communication.")
 
             st.subheader("AI Judgment — Evidence & Uncertainty")
             j1, j2, j3 = st.columns(3)
